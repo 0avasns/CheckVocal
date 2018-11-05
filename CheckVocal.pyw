@@ -1,7 +1,7 @@
 #
-# CheckVocal.pyw v.2.3.1
+# CheckVocal.pyw v.2.3.2.1
 # Athanassios Protopapas
-# 11 August 2017 (parse new subject line produced by DMDX 5.1.5.2)
+# 2 November 2018 (strict-matching fallback for CheckFiles ans)
 #
 # This program will help with naming task data from DMDX
 # It will present each recorded vocal response along with
@@ -11,7 +11,7 @@
 # The user can also check and fix improperly triggered RT measurements.
 # The results are saved in a tab-separated file, one row per subject.
 #
-VERSION="2.3.1.0"
+VERSION="2.3.2.1"
 import sys
 if (sys.platform=="win32"):
     _WINDOWS_ = True
@@ -78,7 +78,7 @@ else: DEFAULT_FONTSIZE=9
 
 ## MICSELLANEOUS PARAMETERS
 ##
-DMDXMODE=False # True when processing azk files; False when processing abitrary audio file sets
+DMDXMODE=True # True when processing azk files; False when processing abitrary audio file sets
 UBPATH='~/Library/Application Support'
 APPNAME="CheckVocal"
 FILES_EXPNAME="CheckVocal_AudioFiles"
@@ -2107,7 +2107,7 @@ class CheckVocalClass:
                 subjno+=1
                 sub_newlines={}
                 outfile.write("\n**********************************************************************\n")
-                outfile.write("Subject %d,%s,%s, ID %s\n" % (subjno,gv.sub_dates[cur_subj],gv.sub_refresh[cur_subj],cur_subj.encode(gv.char_encoding,'replace')))
+                outfile.write(u"Subject %d,%s,%s, ID %s\n".encode(gv.char_encoding,'replace') % (subjno,gv.sub_dates[cur_subj],gv.sub_refresh[cur_subj],cur_subj)) # ThP 18Aug17 bugfix
                 if (gv._COT_):
                     outfile.write("  Item       RT       COT\n")
                 else:
@@ -2423,8 +2423,9 @@ class CheckVocalClass_Files(CheckVocalClass):
         answers=myreadlines(ansfile)
         ansfile.close()
         i=0
-        relist = []
-        anlist = []
+        self.relist = []
+        self.anlist = []
+        self.message = "(no message)"
         for line in answers:
             i += 1
             if ( len(line)<2 ):
@@ -2437,25 +2438,50 @@ class CheckVocalClass_Files(CheckVocalClass):
             nf  = len(filter(lambda f: re.search(rei,f),gv.listoffiles))
             if (nf < 1):
                 logmsg( "Answer line %i (%s) not matching any files" % (i,item))
-            relist.append(item)
-            anlist.append(answer)
+            self.relist.append(item)
+            self.anlist.append(answer)
+        if (self.match_answers(mode="re")<>0): # try flexible matching first, using regular expressions
+            logmsg("Switching to strict filename matching")
+            exitcode = self.match_answers(mode="strict") # try strict matching if regex matching fails
+            if (exitcode<>0):
+                logmsg("Strict matching failed; regular expression message follows:")
+                exiterror( self.message )
 
+    def match_answers(self,mode="re"):
         gv.listofanswers = []
+        if (mode=="strict"):
+            wext = [1 if (len(a)>4 and a[-4:].lower()==DEFAULT_WAVEXT.lower()) else 0 for a in self.relist]
+            if (sum(wext)>0):
+                logmsg("Stripping "+DEFAULT_WAVEXT.lower()+" extensions in -ans")
+                self.relist2 = [a[:-4] if len(a)>4 and a[-4:].lower()==DEFAULT_WAVEXT.lower() else a for a in self.relist]
+            else:
+                self.relist2 = self.relist
         for f in gv.listoffiles:
-            fl = map(lambda a: re.search(a,f),relist)
+            if (mode=="re"):
+                fl = map(lambda a: re.search(a,f),self.relist)
+            elif (mode=="strict"):
+                if (len(f)>4 and f[-4:].lower()==DEFAULT_WAVEXT.lower()): f2 = f[:-4]
+                else: f2 = f
+                fl = map(lambda a: re.match("(?:"+a+r")\Z",f2),self.relist2) # from https://stackoverflow.com/questions/30212413/backport-python-3-4s-regular-expression-fullmatch-to-python-2
+            else:
+                exiterror("Unknown mode in match_answers: %s"%(mode))
             na = len(filter(lambda x: x,fl))
             if (na < 1):
                 logmsg( "No spoken response for file %s"%(f))
                 gv.listofanswers.append(u"--")
             elif (na > 1):
-                exiterror( "Multiple answers matching file %s"%(f))
+                if (mode=="re"): self.message="Multiple answers matching file %s"%(f)
+                return(-1)
+                #exiterror( "Multiple answers matching file %s"%(f))
             else:
                 ai = [i for i,a in enumerate(fl) if a!=None]
                 if (len(ai)<>1):
-                    exiterror( "Something weird happened while processing answers file") # this should not happen
-                gv.listofanswers.append(anlist[ai[0]])
-
-    
+                    if (mode=="re"): self.message="Something weird happened while processing answers file"
+                    return(-2)
+                    #exiterror( "Something weird happened while processing answers file") # this should not happen
+                gv.listofanswers.append(self.anlist[ai[0]])
+        return(0)
+   
     def select_subjects(self):
         pass # no subjects to select
 

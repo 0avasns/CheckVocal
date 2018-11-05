@@ -7,21 +7,21 @@ import glob
 class Target:
     def __init__(self, **kw):
         self.__dict__.update(kw)
-        self.version = "2.3.1.0"
+        self.version = "2.3.2.1"
         self.company_name = "Athanassios Protopapas"
-        self.copyright = "(c) 2017 -- August 11th"
+        self.copyright = "(c) 2018 -- November 3rd"
         self.name = "CheckVocal"
 
 CV = Target(
     description = "DMDX Vocal Response & RT Check Utility",
-    version = "2.3.1.0",
+    version = "2.3.2.1",
     script = "CheckVocal.pyw",
     icon_resources = [(1, "cv.ico")],
     dest_base = "CheckVocal")
 
 CF = Target(
     description = "Audio File RT Check Utility",
-    version = "2.3.1.0",
+    version = "2.3.2.1",
     script = "CheckVocal.pyw",
     icon_resources = [(1, "cf.ico")],
     dest_base = "CheckFiles")
