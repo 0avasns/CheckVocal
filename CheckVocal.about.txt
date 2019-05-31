@@ -1,6 +1,6 @@
-CheckVocal/CheckFiles 2.3.2.1
+CheckVocal/CheckFiles 3.0.0a
 azk2txt 1.2.3
-revised: 2 November 2018
-packaged: 2 November 2018
+revised: 31 May 2019
+packaged: 31 May 2019
 Athanassios Protopapas
 protopap@gmail.com
