@@ -115,6 +115,6 @@ An</a> [article](pdf/Protopapas_2007_BehResMeth.pdf) about CheckVocal was publis
 
 ![CheckVocal Screenshot](checkvocal.jpg)
 
-_Last updated on May 31th, 2019, by [Athanassios Protopapas](mailto:protopap@gmail.com)_
+_Last updated on May 31st, 2019, by [Athanassios Protopapas](mailto:protopap@gmail.com)_
 
 [](mailto:protopap@gmail.com)
