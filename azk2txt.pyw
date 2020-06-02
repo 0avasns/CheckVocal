@@ -1,11 +1,13 @@
 #
-# ask2txt.pyw v. 1.2.3
+# ask2txt.pyw v. 1.3.0
 # Athanassios Protopapas
-# 9 December 2011 (save trial order; keep last folder on Mac; fonts)
+# 1 April 2020 (deal with extra fields on subject line; update registry lookup; report version)
 #
 # This program will convert DMDX data from .azk to .txt,
 # one row (or column) per subject ID, separated by tab, comma, or space
 #
+VERSION = "1.3.0.0"           # ThP added 20200401
+EMAIL = "protopap@gmail.com"  # ThP added 20200401
 import sys
 if (sys.platform=="win32"):
     _WINDOWS_ = True
@@ -173,7 +175,7 @@ class GlobVariables:
             return
 
         try: # WINDOWS #
-            rkey=_winreg.CreateKey(_winreg.HKEY_LOCAL_MACHINE,CV_REGISTRY_KEY)
+            rkey=_winreg.CreateKey(_winreg.HKEY_CURRENT_USER,CV_REGISTRY_KEY) # changed to CURRENT_USER ; ThP 20200401
             self.lastfolder=_winreg.QueryValueEx(rkey,"LastFolder")[0]
             _winreg.CloseKey(rkey)
         except WindowsError: # nonexistent key or error reading registry
@@ -356,7 +358,7 @@ class SetupWindow(Toplevel):
     def save_expdir(self):
         if _WINDOWS_:
             try: # save selected expdir as last folder and close registry key
-                rkey=_winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE,CV_REGISTRY_KEY,0,_winreg.KEY_SET_VALUE)
+                rkey=_winreg.OpenKey(_winreg.HKEY_CURRENT_USER,CV_REGISTRY_KEY,0,_winreg.KEY_SET_VALUE) # changed to CURRENT_USER ; ThP 20200401
                 _winreg.SetValueEx(rkey,"LastFolder",0,_winreg.REG_SZ,gv.expdir)
                 _winreg.CloseKey(rkey)
             except: # failed to update registry
@@ -487,6 +489,7 @@ class azkConvertClass:
                       "Could not open %s to write processing log" % (logfilename))
             global_quit()
 
+        logmsg(("azk2txt version %s (%s)" % (VERSION, mtime))) # ThP added 20200401
         logmsg("Session started : "+str(datetime.datetime.now()))
         gv.azkfilename=gv.expname+".azk"
         try:
@@ -533,8 +536,12 @@ class azkConvertClass:
                     subj=gv.Nsubj
                     break
 
+            # ThP 20200401 copied code from CheckVocal to deal with extra fields in subject line
+            slineparts = string.split(azklines[line + 1].decode(gv.char_encoding).rstrip(), ',')
             try:
-                subj_,date_,refresh_,ids_ = string.split(azklines[line+1][:-1],',') # discard newline
+                subj_,date_,refresh_ = slineparts[:3]
+                ids_ = slineparts[-1]
+            # end of modifications 20200401
             except ValueError:
                 logmsg("Insufficient fields for subject %i (probably missing ID)"%(subjno+1))
                 # useless data without ID, try to skip this subject
@@ -546,7 +553,8 @@ class azkConvertClass:
                 logmsg("Unexpected subject number "+`s_`+" (expected "+`subjno+1`+") at line "+`line`)
                 # perhaps a subject's data have been manually removed from the .azk
             subjno += 1
-            idtmp=string.split(unicode(ids_,gv.char_encoding)) # ID might be in non-latin characters...
+            #idtmp=string.split(unicode(ids_,gv.char_encoding)) # ID might be in non-latin characters...
+            idtmp=string.split(ids_) # ID is already in unicode from slineparts ; ThP 20200401
             if (len(idtmp)>1):
                 s_id = idtmp[1]
             elif (len(ids_)>3 and ids_[1:3]=="ID"):
@@ -945,7 +953,12 @@ def global_quit():
     # a Tk widget and so it is not destroyed by killing root
     raise SystemExit
 
-
+# copied over from CheckVocal ; ThP 20200401
+myfile = sys.argv[0]
+myname = os.path.splitext(os.path.basename(myfile))[0]
+finfo = os.path.getmtime(myfile)
+mtime = datetime.date.isoformat(datetime.date.fromtimestamp(finfo))
+# end of new code 20200401
 CurDir=os.getcwdu() # u for unicode; really important for Tkinter!
 IconFile=os.path.join(CurDir,u"a2t.ico")
 try:
