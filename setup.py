@@ -41,7 +41,7 @@ setup(
               },
       windows=[CF,CF,AZT,CV], # makes no sense but whatever is first does not get an icon on the exe, so I duplicated it ...
       data_files=[
-                  (r'tcl\snacklib', glob.glob(r'C:\python27\tcl\snack2.2\*')),
+                  (r'tcl\snacklib', glob.glob(r'C:\Program Files (x86)\Python 2.7\tcl\snacklib\*')),
                   ("icons",["cv.ico","cf.ico","a2t.ico"]),
                   (".",["README-CheckVocal.txt"])
                  ],
