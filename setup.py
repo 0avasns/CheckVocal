@@ -7,28 +7,28 @@ import glob
 class Target:
     def __init__(self, **kw):
         self.__dict__.update(kw)
-        self.version = "3.0.0.0"
+        self.version = "3.0.2.0"
         self.company_name = "Athanassios Protopapas"
-        self.copyright = "(c) 2019 -- May 31st"
+        self.copyright = "(c) 2020 -- June 2nd"
         self.name = "CheckVocal"
 
 CV = Target(
     description = "DMDX Vocal Response & RT Check Utility",
-    version = "3.0.0.0",
+    version = "3.0.2.0",
     script = "CheckVocal.pyw",
     icon_resources = [(1, "cv.ico")],
     dest_base = "CheckVocal")
 
 CF = Target(
     description = "Audio File RT Check Utility",
-    version = "3.0.0.0",
+    version = "3.0.2.0",
     script = "CheckVocal.pyw",
     icon_resources = [(1, "cf.ico")],
     dest_base = "CheckFiles")
 
 AZT = Target(
     description = "DMDX output converter: .azk to .txt format",
-    version = "1.2.3.0",
+    version = "1.3.0.0",
     script = "azk2txt.pyw",
     icon_resources = [(1, "a2t.ico")],
     dest_base = "azk2txt")

@@ -1,7 +1,7 @@
 #
-# CheckVocal.pyw v.3.0.0.0
+# CheckVocal.pyw v.3.0.2
 # Athanassios Protopapas
-# 31 May 2019 (user string entry or group classification instead of accuracy judgment)
+# 2 June 2020 (fixed NO_RESPONSE in text-entry mode)
 #
 # This program will help with naming task data from DMDX
 # It will present each recorded vocal response along with
@@ -11,7 +11,7 @@
 # The user can also check and fix improperly triggered RT measurements.
 # The results are saved in a tab-separated file, one row per subject.
 #
-VERSION = "3.0.0.0"
+VERSION = "3.0.2.0"
 EMAIL = "protopap@gmail.com"
 import sys
 
@@ -47,9 +47,9 @@ import re
 
 ## FIXED PARAMETERS set in GlobVariables
 DEFAULT_C_DIST = 10  # pixels for vertical panel separation
-DEFAULT_SUBJ_COL = 25  # subjects per column in subject selection frame
+DEFAULT_SUBJ_COL = 30  # subjects per column in subject selection frame
 DEFAULT_ONE_COL_MAX = 20  # maximum number of subjects in a single column
-DEFAULT_SUBJ_MAX = 100  # above this number, only subject IDs are shown for selection
+DEFAULT_SUBJ_MAX = 180  # above this number, only subject IDs are shown for selection
 DEFAULT_DETRIGGER = 0.5  # proportion of RT trigger RMS value signaling silence
 DEFAULT_CLASSMULT = 1000000 # number to multiply with class to be added to RT in classification mode
 
@@ -1259,7 +1259,7 @@ class CheckWaves(Toplevel):
         gv.listoftrials[cv_process.current_index][0], cv_process.N_done + 1, cv_process.N_todo))
         self.progress.update()
         if (gv._ENTERSTRING):
-            if (self.rt == -1):
+            if ((self.rt == -1) or (self.rt == -gv.timeout)):
                 gv.userstring.set("")
             else:
                 gv.userstring.set(`self.rt`)
@@ -1406,7 +1406,7 @@ class CheckWaves(Toplevel):
                 self.update_itemrt(newrt)
                 logmsg("%s string set to %.1f" % (gv.listoffiles[cv_process.current_index], newrt))
             return True
-        elif ((len(ustr) < 1) and (self.rt == -1)):  # nothing entered; no change
+        elif ((len(ustr) < 1) and ((self.rt == -1) or (self.rt == -gv.timeout))):  # nothing entered (or missing response); no change
             return True
         else:  # invalid field; indicate problem with string
             self.utxt.configure(fg='red')
@@ -1738,8 +1738,8 @@ class SubjectSelect(Toplevel):
         sub_incol = 0
         self.c = {}
 
-        gv.Nsubj = len(gv.sub_trials.keys())
-        if (gv.Nsubj > 100):
+        gv.Nsubj = len(gv.sub_ids.keys()) # was sub_trials ThP 22May20 ; this seems to get confused with duplicate IDs
+        if (gv.Nsubj > gv._SUBJ_MAX):
             logmsg("Number of subjects (%i) probably too large to fit date/PC info" % (gv.Nsubj))
         if (gv.Nsubj > gv._ONE_COL_MAX):
             multi_column = 1
