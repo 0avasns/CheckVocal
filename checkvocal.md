@@ -6,7 +6,7 @@
 
 _**DISCLAIMER/WARNING:** CheckVocal, CheckFiles, and azk2txt are not guaranteed to work right or to be appropriate for you or for your data. I have tried to make them useful and robust for my personal use, and I have found them so useful for my work that I think other people might like to use them. Download and use them at your own responsibility and risk. You are advised against relying exclusively on these programs for critical data. In any case, you should always confirm, by examining the output file against the original azk data file, that the stored values are correct. You may not blame me if you lose your data, your results make no sense, or your computer explodes. On the other hand, if you identify any errors or problems I'd be grateful if you'd [let me know](mailto:protopap@gmail.com) so I can try and fix them for future releases of CheckVocal/CheckFiles/azk2txt._
 
-[Download CheckVocal/CheckFiles](https://github.com/0avasns/CheckVocal/releases/download/v3.0.0/CheckVocal_3.0.0.7z) v3.0.0a (31 May 2019) – Includes azk2txt v1.2.3  
+[Download CheckVocal/CheckFiles](https://github.com/0avasns/CheckVocal/releases/download/v3.0.2/CheckVocal_v3.0.2.7z) v3.0.2 (2 June 2020) – Includes azk2txt v1.3.0  
 Uncompress this file with [7-zip](https://www.7-zip.org/) to a location of your choice. CheckVocal.exe, azk2txt.exe, and CheckFiles.exe will be found in the newly created “CheckVocal” folder.   
 As 3.0 is not thoroughly tested yet, you may want to use a [previous stable version](https://github.com/0avasns/CheckVocal/releases/download/v.2.3.1.0/CheckVocal_archive.exe) instead.  
 If you have [Python](http://www.python.org/) and [Snack](http://www.speech.kth.se/snack/) installed, then you can download the script files only: CheckVocal.pyw and azk2txt.pyw can be found as Source Code under the corresponding releases on [github](https://github.com/0avasns/CheckVocal/releases). Note that Snack only works with 32-bit Python version 2; if you have Python 3 or a 64-bit installation then you won't be able to use it.  
@@ -115,6 +115,6 @@ An</a> [article](pdf/Protopapas_2007_BehResMeth.pdf) about CheckVocal was publis
 
 ![CheckVocal Screenshot](checkvocal.jpg)
 
-_Last updated on May 31st, 2019, by [Athanassios Protopapas](mailto:protopap@gmail.com)_
+_Last updated on March 5th, 2021, by [Athanassios Protopapas](mailto:protopap@gmail.com)_
 
 [](mailto:protopap@gmail.com)
