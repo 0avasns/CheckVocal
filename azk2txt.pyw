@@ -1,12 +1,13 @@
 #
-# ask2txt.pyw v. 1.3.0
+# ask2txt.pyw v. 1.3.0 alpha
 # Athanassios Protopapas
-# 1 April 2020 (deal with extra fields on subject line; update registry lookup; report version)
+# 9 October 2025 (automatically generated from v1.2.3 using 2to3)
+# 5 November 2025 (first attempt to generate exe)
 #
 # This program will convert DMDX data from .azk to .txt,
 # one row (or column) per subject ID, separated by tab, comma, or space
 #
-VERSION = "1.3.0.0"           # ThP added 20200401
+VERSION = "2.0.0.0"           # ThP added 20200401
 EMAIL = "protopap@gmail.com"  # ThP added 20200401
 import sys
 if (sys.platform=="win32"):
@@ -24,11 +25,11 @@ import math
 import datetime
 import time
 import operator
-if _WINDOWS_: import _winreg
+if _WINDOWS_: import winreg
 elif _MAC_ : import plistlib
-from Tkinter import *
-import tkFileDialog, tkMessageBox, tkSimpleDialog
-import tkFont
+from tkinter import *
+import tkinter.filedialog, tkinter.messagebox, tkinter.simpledialog
+import tkinter.font
 
 ## FIXED PARAMETERS set in GlobVariables
 DEFAULT_C_DIST=10 # pixels for vertical panel separation
@@ -124,8 +125,8 @@ class GlobVariables:
         self.fontfamily=DEFAULT_FONTFAMILY
         self.fontsize=DEFAULT_FONTSIZE
         #self.largefontsize=DEFAULT_FONTSIZE*10/9
-        self.mainfont=tkFont.Font(family=self.fontfamily,size=self.fontsize,weight=tkFont.NORMAL,slant=tkFont.ROMAN)
-        self.mainboldfont=tkFont.Font(family=self.fontfamily,size=self.fontsize,weight=tkFont.BOLD,slant=tkFont.ROMAN)
+        self.mainfont=tkinter.font.Font(family=self.fontfamily,size=self.fontsize,weight=tkinter.font.NORMAL,slant=tkinter.font.ROMAN)
+        self.mainboldfont=tkinter.font.Font(family=self.fontfamily,size=self.fontsize,weight=tkinter.font.BOLD,slant=tkinter.font.ROMAN)
         #self.largefont=tkFont.Font(family=self.fontfamily,size=self.largefontsize,weight=tkFont.NORMAL,slant=tkFont.ROMAN)
         #self.largeboldfont=tkFont.Font(family=self.fontfamily,size=self.largefontsize,weight=tkFont.BOLD,slant=tkFont.ROMAN)
         
@@ -175,18 +176,18 @@ class GlobVariables:
             return
 
         try: # WINDOWS #
-            rkey=_winreg.CreateKey(_winreg.HKEY_CURRENT_USER,CV_REGISTRY_KEY) # changed to CURRENT_USER ; ThP 20200401
-            self.lastfolder=_winreg.QueryValueEx(rkey,"LastFolder")[0]
-            _winreg.CloseKey(rkey)
+            rkey=winreg.CreateKey(winreg.HKEY_CURRENT_USER,CV_REGISTRY_KEY) # changed to CURRENT_USER ; ThP 20200401
+            self.lastfolder=winreg.QueryValueEx(rkey,"LastFolder")[0]
+            winreg.CloseKey(rkey)
         except WindowsError: # nonexistent key or error reading registry
             self.lastfolder=""    # an empty string to return false from os.path.exists()
             
         if (not os.path.exists(self.lastfolder)): # path not available (deleted, on removable media..)
             try: # retrieve user "home" from the registry
-                dkey=_winreg.OpenKey(_winreg.HKEY_CURRENT_USER,"Volatile Environment\\")
-                homedrive=_winreg.QueryValueEx(dkey,"HOMEDRIVE")[0]
-                homepath=_winreg.QueryValueEx(dkey,"HOMEPATH")[0]
-                _winreg.CloseKey(dkey)
+                dkey=winreg.OpenKey(winreg.HKEY_CURRENT_USER,"Volatile Environment\\")
+                homedrive=winreg.QueryValueEx(dkey,"HOMEDRIVE")[0]
+                homepath=winreg.QueryValueEx(dkey,"HOMEPATH")[0]
+                winreg.CloseKey(dkey)
                 self.lastfolder=homedrive+homepath
             except WindowsError: # nonexistent key or error reading registry
                 self.lastfolder="."
@@ -203,7 +204,7 @@ def logmsg(logtext):
 #
 def exiterror(errtext):
     logmsg("**ERROR: "+errtext)
-    tkMessageBox.showerror("azk2txt error",errtext)
+    tkinter.messagebox.showerror("azk2txt error",errtext)
     global_quit()
 
 # Deal with non-terminated text files by adding a final newline
@@ -227,7 +228,7 @@ class SetupWindow(Toplevel):
 ##        self.transient(parent) ### NO NO NO
         self.parent=parent
 
-        self.title(u"azk2txt setup")
+        self.title("azk2txt setup")
         self.geometry("+%d+%d" % (gv.scale(100),gv.scale(150)))
         if (IconFile!="None"): self.wm_iconbitmap(IconFile)
 
@@ -247,7 +248,7 @@ class SetupWindow(Toplevel):
         self.rlabel2=Label(self.encF2,text="Character encoding:")
         self.rlabel2.config(width=20,font=gv.mainfont,anchor="e")
         self.rlabel2.pack(side="left")
-        self.encodingmenu2=apply(OptionMenu,(self.encF2,gv.encoding)+tuple(ENCODING_OPTIONS)) # from http://effbot.org/tkinterbook/optionmenu.htm
+        self.encodingmenu2=OptionMenu(*(self.encF2,gv.encoding)+tuple(ENCODING_OPTIONS)) # from http://effbot.org/tkinterbook/optionmenu.htm
         self.encodingmenu2.config(width=15,font=gv.mainfont)
         self.encodingmenu2.pack(side="left")
         self.encF2.pack(side="bottom",anchor="w")
@@ -358,9 +359,9 @@ class SetupWindow(Toplevel):
     def save_expdir(self):
         if _WINDOWS_:
             try: # save selected expdir as last folder and close registry key
-                rkey=_winreg.OpenKey(_winreg.HKEY_CURRENT_USER,CV_REGISTRY_KEY,0,_winreg.KEY_SET_VALUE) # changed to CURRENT_USER ; ThP 20200401
-                _winreg.SetValueEx(rkey,"LastFolder",0,_winreg.REG_SZ,gv.expdir)
-                _winreg.CloseKey(rkey)
+                rkey=winreg.OpenKey(winreg.HKEY_CURRENT_USER,CV_REGISTRY_KEY,0,winreg.KEY_SET_VALUE) # changed to CURRENT_USER ; ThP 20200401
+                winreg.SetValueEx(rkey,"LastFolder",0,winreg.REG_SZ,gv.expdir)
+                winreg.CloseKey(rkey)
             except: # failed to update registry
                 pass # fail silently; msgwindow not available and logfile not yet open
         elif _MAC_:
@@ -375,7 +376,7 @@ class SetupWindow(Toplevel):
                 pass # fail silently; msgwindow not available and logfile not yet open
         
     def get_filename(self,c_event=None): 
-        filename=tkFileDialog.askopenfilename(parent=self.parent,initialdir=gv.lastfolder,filetypes=[('DMDX data files','*.azk')] ,title="Choose a DMDX results file")
+        filename=tkinter.filedialog.askopenfilename(parent=self.parent,initialdir=gv.lastfolder,filetypes=[('DMDX data files','*.azk')] ,title="Choose a DMDX results file")
         if (len(filename)>0):
             gv.expdir=os.path.dirname(filename)+"/"
             gv.lastfolder=gv.expdir
@@ -401,12 +402,12 @@ class SubjectSelect(Toplevel):
         self.destroy()
 
     def subj_select_all(self): # select all available subjects
-        for subject in gv.sub_trials.keys():
+        for subject in list(gv.sub_trials.keys()):
             if (cv_process.subject_select[subject]):
                 self.c[subject].select()
 
     def subj_select_none(self): # deselect all available subjects
-        for subject in gv.sub_trials.keys():
+        for subject in list(gv.sub_trials.keys()):
             if (cv_process.subject_select[subject]):
                 self.c[subject].deselect()
         
@@ -414,7 +415,7 @@ class SubjectSelect(Toplevel):
 
         Toplevel.__init__(self,parent)
         self.parent=parent
-        self.title(u"DMDX subject selection")
+        self.title("DMDX subject selection")
         self.geometry("+%d+%d" % (100,175))
         if (IconFile!="None"): self.wm_iconbitmap(IconFile)
 
@@ -427,7 +428,7 @@ class SubjectSelect(Toplevel):
         sub_incol = 0
         self.c={}
 
-        gv.Nsubj = len(gv.sub_trials.keys())
+        gv.Nsubj = len(list(gv.sub_trials.keys()))
         if (gv.Nsubj > 100):
             logmsg( "Number of subjects (%i) probably too large to fit date/PC info" % (gv.Nsubj))
         if (gv.Nsubj > gv._ONE_COL_MAX):
@@ -435,7 +436,7 @@ class SubjectSelect(Toplevel):
             column_length = math.ceil (gv.Nsubj / math.ceil(float(gv.Nsubj)/float(gv._SUBJ_COL)) )
         ##
         ##for subject in gv.sub_trials.keys():
-        live_subjects=gv.sub_ids_new.keys()
+        live_subjects=list(gv.sub_ids_new.keys())
         for subjnum in live_subjects:
             subject=gv.sub_ids_new[subjnum]
         ##
@@ -485,7 +486,7 @@ class azkConvertClass:
             # this is the same as exiterror but is called directly
             # because exiterror also writes to the logfile,
             # which here cannot be opened
-            tkMessageBox.showerror("Log file error",
+            tkinter.messagebox.showerror("Log file error",
                       "Could not open %s to write processing log" % (logfilename))
             global_quit()
 
@@ -550,7 +551,7 @@ class azkConvertClass:
                 ids_="xxx xxx" # so that a dummy ID will be made up below
             s_ = string.atoi(string.split(subj_)[1])
             if (subj_[:7]!="Subject" or subjno+1 != s_):
-                logmsg("Unexpected subject number "+`s_`+" (expected "+`subjno+1`+") at line "+`line`)
+                logmsg("Unexpected subject number "+repr(s_)+" (expected "+repr(subjno+1)+") at line "+repr(line))
                 # perhaps a subject's data have been manually removed from the .azk
             subjno += 1
             #idtmp=string.split(unicode(ids_,gv.char_encoding)) # ID might be in non-latin characters...
@@ -568,7 +569,7 @@ class azkConvertClass:
                 logmsg("Could not determine ID for subject %i at line %i, will use %s" % (s_,line+1,s_id))
 
             gv.sub_ids_new[subjno]=s_id
-            for s_temp in gv.sub_ids.keys():
+            for s_temp in list(gv.sub_ids.keys()):
                 if (s_id == gv.sub_ids[s_temp]):
                     try:
                         logmsg( "Duplicate subject ID %s (subjects %i and %i)" % (s_id,gv.sub_nums[s_id],s_))
@@ -576,7 +577,7 @@ class azkConvertClass:
                         logmsg( "Duplicate subject ID %s for subject %i (and probably two or more other subjects)" % (s_id,s_))
                     gv.sub_ids_new[subjno]=s_id+"_S#%03i"%(s_)
                     logmsg( "Will use ID %s for subject %i"%(gv.sub_ids_new[subjno],s_) )
-                    if ((s_id in gv.sub_nums.keys()) and # If two or more previous subjects have the same ID
+                    if ((s_id in list(gv.sub_nums.keys())) and # If two or more previous subjects have the same ID
                                                          # then sub_nums is indexed by the modified IDs already
                                                          # and it is a mess to figure out which IDs go with which
                                                          # experimental runs. The good news is that in such a case
@@ -604,7 +605,7 @@ class azkConvertClass:
 
             gv.sub_ids[subjno]=s_id
             new_s_id=gv.sub_ids_new[subjno]
-            logmsg( "Subject "+`subjno`+", ID="+new_s_id)
+            logmsg( "Subject "+repr(subjno)+", ID="+new_s_id)
 
             self.subject_select[new_s_id]=1
 
@@ -624,11 +625,11 @@ class azkConvertClass:
                         logmsg( "COT header detected")
                     _COT_ = 1
                 else:
-                    logmsg( "Unknown header identifier at line "+`line+2`)
+                    logmsg( "Unknown header identifier at line "+repr(line+2))
                     self.subject_select[new_s_id]=0  # do not process subjects with not understood data
                     
             if (RTheaders[:2] != ["Item","RT"]):
-                logmsg( "Item/RT identifier not found at line "+`line+2`)
+                logmsg( "Item/RT identifier not found at line "+repr(line+2))
                 self.subject_select[new_s_id]=0  # definitely kill the subject with unparseable data
                 # This is a problem for the subject's data but perhaps the rest of the file is OK
 
@@ -686,7 +687,7 @@ class azkConvertClass:
 
         logmsg( "End of processing trials in %s, %i lines left" % (gv.azkfilename,Nlines-line))
 
-        for cur_subj in gv.sub_trials.keys():
+        for cur_subj in list(gv.sub_trials.keys()):
             sub_trial_ind=0
             for trial in gv.sub_trials[cur_subj]:
                 item,rt=trial
@@ -699,7 +700,7 @@ class azkConvertClass:
 
         # no point in moving on if there are no valid subject data
         valid_subjects=0
-        for subject in gv.sub_trials.keys():
+        for subject in list(gv.sub_trials.keys()):
             if (self.subject_select[subject]==1): valid_subjects += 1
         if (valid_subjects==0):
             exiterror( "No valid subject data to process!")            
@@ -719,28 +720,28 @@ class azkConvertClass:
             subselect.focus_force()
             subselect.wait_window(subselect)
 
-            for subject in gv.sub_trials.keys():
+            for subject in list(gv.sub_trials.keys()):
                 self.subject_select[subject]=subselect.sub_buttons[subject].get()
 
         # Remove deselected subject entries from the sub_trials dictionary
-        for subject in gv.sub_trials.keys():
+        for subject in list(gv.sub_trials.keys()):
             if (not self.subject_select[subject]):
                 del(gv.sub_trials[subject])
 
         # End of status restoration and subject verification       
-        if (len(gv.sub_trials.keys()) < 1):
+        if (len(list(gv.sub_trials.keys())) < 1):
             exiterror( "No subjects left to process!")
            
         # Make sure items are numbered identically and sorted correctly between subjects
-        ref_subj=gv.sub_trials.keys()[0]
-        for cur_subj in gv.sub_trials.keys()[1:]:
+        ref_subj=list(gv.sub_trials.keys())[0]
+        for cur_subj in list(gv.sub_trials.keys())[1:]:
             for trial in range(self.ntrials):
                 if (gv.sub_trials[ref_subj][trial][0] != gv.sub_trials[cur_subj][trial][0]):
                         exiterror( "Trial (item) number mismatch between subjects %i (%s, item %i) and %i (%s, item %i)" % (gv.sub_nums[ref_subj],ref_subj,gv.sub_trials[ref_subj][trial][0],gv.sub_nums[cur_subj],cur_subj,gv.sub_trials[cur_subj][trial][0]))
 
         # prepare counters
         gv.done=1 # was 0 in CheckVocal
-        self.N_todo=len(gv.sub_trials.keys())* self.ntrials # how many responses there are to be checked in total
+        self.N_todo=len(list(gv.sub_trials.keys()))* self.ntrials # how many responses there are to be checked in total
 
         ############################################################################
         
@@ -758,13 +759,13 @@ class azkConvertClass:
         while (outfileOK<1):
             if (outfileOK==0):
                 askmessagetext="Output file %s exists, overwrite? (y/n)" % (outfilename)
-                ans=tkMessageBox.askyesno("File overwrite",askmessagetext)
+                ans=tkinter.messagebox.askyesno("File overwrite",askmessagetext)
             else: # -1 means we are looping
                 ans=False
             if (ans): # overwrite
                 outfileOK=1
             else: # ans=False
-                outfilename=tkFileDialog.asksaveasfilename(parent=root,initialdir=gv.expdir,filetypes=[('Text files','*.txt')] ,
+                outfilename=tkinter.filedialog.asksaveasfilename(parent=root,initialdir=gv.expdir,filetypes=[('Text files','*.txt')] ,
                                                            title="Enter another output file name")
             try:
                 outfile=open(outfilename,"w")
@@ -776,12 +777,12 @@ class azkConvertClass:
         # make a new list from sub_ids.keys() instead of sub_trials.keys()
         # in order to save the data in the original subject order (as in azk)
         live_subjects=[] 
-        for subjnum in gv.sub_ids_new.keys(): # gv.sub_trials.keys() # was sub_ids.keys() // thp 26-Nov-06
+        for subjnum in list(gv.sub_ids_new.keys()): # gv.sub_trials.keys() # was sub_ids.keys() // thp 26-Nov-06
             if (self.subject_select[gv.sub_ids_new[subjnum]]): # was sub_ids[subjnum]     // thp 26-Nov-06
                 live_subjects.append(subjnum)          
                 
         if (gv.save_rows==-1): # save subject data in AZK file
-            outfile.write("\nSubjects incorporated to date: %03d\n"%len(gv.sub_trials.keys()))
+            outfile.write("\nSubjects incorporated to date: %03d\n"%len(list(gv.sub_trials.keys())))
             outfile.write("Data file started on machine CheckVocal\n")
             subjno=0
             # Need to re-sort by sub_origlines[s_id] (which was set to azklines[startline:endline])
@@ -798,7 +799,7 @@ class azkConvertClass:
                 else:
                     outfile.write("  Item       RT\n")
                 for trial in gv.sub_trials[ref_subj]:
-                    sub_newlines[`trial[0]`]=("%6d  %8.2f\n" % (trial[0],gv.sub_trials[cur_subj][gv.sub_trials[ref_subj].index(trial)][1]))
+                    sub_newlines[repr(trial[0])]=("%6d  %8.2f\n" % (trial[0],gv.sub_trials[cur_subj][gv.sub_trials[ref_subj].index(trial)][1]))
                 for trial_line in sub_origlines[cur_subj]:
                     if (trial_line[0]=="!"):
                         outfile.write(trial_line)
@@ -847,7 +848,7 @@ class azkConvertClass:
                 outfile.write("\n")
 ##                
             for trial in gv.sub_trials[ref_subj]:
-                outfile.write(`trial[0]`)
+                outfile.write(repr(trial[0]))
                 for subjnum in live_subjects:         # was gv.sub_trials.keys():   // thp 26-Nov-06
                     cur_subj=gv.sub_ids_new[subjnum]  # added to get ID from number // thp 26-Nov-06
                     outfile.write(gv._SEP+"%.1f"%(gv.sub_trials[cur_subj][gv.sub_trials[ref_subj].index(trial)][1]))
@@ -855,7 +856,7 @@ class azkConvertClass:
             ## save trial order after RT; added 12/2011
             if gv.savetrialorder.get()==1:
                 for trial in gv.sub_trials[ref_subj]:
-                    outfile.write("ord"+`trial[0]`)
+                    outfile.write("ord"+repr(trial[0]))
                     for subjnum in live_subjects:
                         cur_subj=gv.sub_ids_new[subjnum]
                         outfile.write(gv._SEP+"%i"%(gv.sub_order[cur_subj][gv.sub_trials[ref_subj].index(trial)][1]))
@@ -904,11 +905,11 @@ class azkConvertClass:
             if gv.saverefresh.get()==1:
                 outfile.write(gv._SEP+"refresh")
             for trial in gv.sub_trials[ref_subj]:
-                outfile.write(gv._SEP+`trial[0]`)
+                outfile.write(gv._SEP+repr(trial[0]))
             ## Optionally, save trial order after RT; added 12/2011
             if gv.savetrialorder.get()==1: 
                 for trial in gv.sub_order[ref_subj]:
-                    outfile.write(gv._SEP+"ord"+`trial[0]`)
+                    outfile.write(gv._SEP+"ord"+repr(trial[0]))
             outfile.write("\n")
             ##for cur_subj in gv.sub_trials.keys():
             for subjnum in live_subjects:
@@ -934,7 +935,7 @@ class azkConvertClass:
                 outfile.write("\n")
         outfile.close()
         logmsg( "Successfully wrote "+outfilename)
-        tkMessageBox.showinfo("azk2txt message","Successful completion")
+        tkinter.messagebox.showinfo("azk2txt message","Successful completion")
 
         global_quit()
         ############################################################################
@@ -955,19 +956,20 @@ def global_quit():
 
 # copied over from CheckVocal ; ThP 20200401
 myfile = sys.argv[0]
-myname = os.path.splitext(os.path.basename(myfile))[0]
+myname,myext = os.path.splitext(os.path.basename(myfile))
 finfo = os.path.getmtime(myfile)
 mtime = datetime.date.isoformat(datetime.date.fromtimestamp(finfo))
 # end of new code 20200401
-CurDir=os.getcwdu() # u for unicode; really important for Tkinter!
-IconFile=os.path.join(CurDir,u"a2t.ico")
+CurDir=os.getcwd() # u for unicode; really important for Tkinter!
+if myext==".exe": CurDir = os.path.join(CurDir,"_internal") # assume pyinstaller setup
+IconFile=os.path.join(CurDir,"a2t.ico")
 try:
     if (not os.path.exists(IconFile)): IconFile="None"
 except:
     IconFile="None" # to catch any problems
 
 root=Tk()
-root.title(u"azk2txt main")
+root.title("azk2txt main")
 if (IconFile!="None"): root.wm_iconbitmap(IconFile)
 root.withdraw()
 

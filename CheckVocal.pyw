@@ -1,7 +1,13 @@
 #
-# CheckVocal.pyw v.3.0.2
+# CheckVocal.pyw v.4.0.0 alpha
 # Athanassios Protopapas
-# 2 June 2020 (fixed NO_RESPONSE in text-entry mode)
+# 9 October 2025 (automatically generated from v3.0.2 using 2to3)
+# 5 November 2025 (first alpha version complete)
+#   Gradually replaced snack sound library with:
+#   - simpleaudio for playing out sounds
+#   - praat-parselmouth for signal processing and creating spectograms
+#   - Pillow for displaying the waveform and spectrogram panels
+# 1 June 2026 (windows packaging with PyInstaller)
 #
 # This program will help with naming task data from DMDX
 # It will present each recorded vocal response along with
@@ -11,7 +17,7 @@
 # The user can also check and fix improperly triggered RT measurements.
 # The results are saved in a tab-separated file, one row per subject.
 #
-VERSION = "3.0.2.0"
+VERSION = "4.0.0.0"
 EMAIL = "protopap@gmail.com"
 import sys
 
@@ -25,7 +31,7 @@ else:
     _WINDOWS_ = False
     _MAC_ = False
 import os
-import string
+#import string
 import math
 import datetime
 import time
@@ -36,14 +42,19 @@ import functools
 import inspect
 
 if _WINDOWS_:
-    import _winreg
+    import winreg
 elif _MAC_:
     import plistlib
-from Tkinter import *
-from tkSnack import *
-import tkFileDialog, tkMessageBox, tkSimpleDialog
-import tkFont
+from tkinter import *
+import tkinter.filedialog, tkinter.messagebox, tkinter.simpledialog
+import tkinter.font
 import re
+
+import parselmouth
+import numpy as np
+from PIL import ImageTk, Image, ImageEnhance
+import simpleaudio as sa
+from scipy.signal import butter, lfilter
 
 ## FIXED PARAMETERS set in GlobVariables
 DEFAULT_C_DIST = 10  # pixels for vertical panel separation
@@ -96,11 +107,12 @@ UBPATH = '~/Library/Application Support'
 APPNAME = "CheckVocal"
 FILES_EXPNAME = "CheckVocal_AudioFiles"
 PLISTFNAME = "param.plist"
-DEFAULT_WAVEXT = u".WAV"  # apparently, DMDX saves with uppercase extension and the Mac doesn't like that
+DEFAULT_WAVEXT = ".WAV"  # apparently, DMDX saves with uppercase extension and the Mac doesn't like that
 FILES_WAVEXTS = [DEFAULT_WAVEXT, DEFAULT_WAVEXT.lower()]
 CV_REGISTRY_KEY = "SOFTWARE\\CheckVocal\\"  # location of last folder key
-PRINT_ENCODING = "iso-8859-1"  # for printing messages on console window
-ENCODING_OPTIONS = ["Latin (ISO-8859-1)",
+PRINT_ENCODING = "UTF-8"  # for printing messages on console window
+ENCODING_OPTIONS = ["UTF-8",
+                    "Latin (ISO-8859-1)",
                     "European (ISO-8859-2)",
                     "Esperanto (ISO-8859-3)",
                     "Baltic (ISO-8859-4)",
@@ -113,8 +125,18 @@ ENCODING_OPTIONS = ["Latin (ISO-8859-1)",
                     "Chinese (GB2312)",
                     "Japanese (EUC-JP)",
                     "Korean (EUC-KR)"]
-_NO_SOUND_FLAG_ = u"*!*"  # the "code" string in -ans to skip a response (lacking an audio file)
-
+_NO_SOUND_FLAG_ = "*!*"  # the "code" string in -ans to skip a response (lacking an audio file)
+WBG = (195,191,164) # window background color
+MANUAL_GAMMA = 0    # auto adjustment (of the waveform image) by default
+DEFAULT_GAMMA = 1.15 # default gamma value for manual adjustment
+MIN_GAMMA = 0.5
+MAX_GAMMA = 1.5
+DEFAULT_CONTRAST_ENH = 1.1 # default contrast enhancement for spectrogram
+MIN_CONTRENH = 1.0
+MAX_CONTRENH = 2.0
+MAXINT2E15 = 2**15  # range for signed 16-bit image value
+MAXIMGU8 = 2**8 - 1 # maximum unsigned 8-bit image value 
+SNDINT_TIMESTEP = 0.0001 # time step (in 2) for the intensity curve (and RT resolution)
 
 # Variables and settings that need to be available to various widgets and processes
 #
@@ -124,8 +146,11 @@ class GlobVariables:
         self.encoding = StringVar(root)
         self.w_canvas = StringVar(root)
         self.h_canvas = StringVar(root)
+        self.sgamma = StringVar(root)
+        self.scontrenh = StringVar(root)
         self.rmstxt = StringVar(root)
         self.wdutxt = StringVar(root)
+        self.cgchoice = IntVar(root)
         self.trigchoice = IntVar(root)
         self.reversetriggerchoice = IntVar(root)
         self.removeDCchoice = IntVar(root)
@@ -190,24 +215,24 @@ class GlobVariables:
         ## Fonts
         self.fontfamily = DEFAULT_FONTFAMILY
         self.fontsize = DEFAULT_FONTSIZE
-        self.largefontsize = DEFAULT_FONTSIZE * 10 / 9
-        self.verylargefontsize = DEFAULT_FONTSIZE * 14 / 9
-        self.mainfont = tkFont.Font(family=self.fontfamily, size=self.fontsize, weight=tkFont.NORMAL,slant=tkFont.ROMAN)
-        self.mainboldfont = tkFont.Font(family=self.fontfamily, size=self.fontsize, weight=tkFont.BOLD,slant=tkFont.ROMAN)
-        self.largefont = tkFont.Font(family=self.fontfamily, size=self.largefontsize, weight=tkFont.NORMAL,slant=tkFont.ROMAN)
-        self.largeboldfont = tkFont.Font(family=self.fontfamily, size=self.largefontsize, weight=tkFont.BOLD,slant=tkFont.ROMAN)
-        self.verylargefont = tkFont.Font(family=self.fontfamily, size=self.verylargefontsize, weight=tkFont.NORMAL,slant=tkFont.ROMAN)
-        self.verylargeboldfont = tkFont.Font(family=self.fontfamily, size=self.verylargefontsize, weight=tkFont.BOLD,slant=tkFont.ROMAN)
+        self.largefontsize = DEFAULT_FONTSIZE * 10 // 9       # 2025-10-09 changed to integer division
+        self.verylargefontsize = DEFAULT_FONTSIZE * 14 // 9   # 2025-10-09 changed to integer division
+        self.mainfont = tkinter.font.Font(family=self.fontfamily, size=self.fontsize, weight=tkinter.font.NORMAL,slant=tkinter.font.ROMAN)
+        self.mainboldfont = tkinter.font.Font(family=self.fontfamily, size=self.fontsize, weight=tkinter.font.BOLD,slant=tkinter.font.ROMAN)
+        self.largefont = tkinter.font.Font(family=self.fontfamily, size=self.largefontsize, weight=tkinter.font.NORMAL,slant=tkinter.font.ROMAN)
+        self.largeboldfont = tkinter.font.Font(family=self.fontfamily, size=self.largefontsize, weight=tkinter.font.BOLD,slant=tkinter.font.ROMAN)
+        self.verylargefont = tkinter.font.Font(family=self.fontfamily, size=self.verylargefontsize, weight=tkinter.font.NORMAL,slant=tkinter.font.ROMAN)
+        self.verylargeboldfont = tkinter.font.Font(family=self.fontfamily, size=self.verylargefontsize, weight=tkinter.font.BOLD,slant=tkinter.font.ROMAN)
         #
 
     def scale(self, w):
-        return w * DEFAULT_FONTSIZE / DEFAULT_SCALE
+        return w * DEFAULT_FONTSIZE // DEFAULT_SCALE          # 2025-10-09 changed to integer division
 
     def update(self):
         if (self.timechoice.get() == 0):
             self.timeout = self.dmdxtimeout  # get from DMDX
         else:
-            self.timeout = string.atoi(self.timetxt.get())
+            self.timeout = int(self.timetxt.get())
         tmp_enc = self.encoding.get().split()[-1]
         self.char_encoding = tmp_enc.strip('()')
         ##
@@ -218,11 +243,14 @@ class GlobVariables:
         self._REMOVEDUPLICATES = self.remove_duplicates.get()  # ThP May 2014
         self._ENTERSTRING = self.enterstring.get()  # ThP April 2019
         self._DOCLASSIFY = self.doclassify.get()    # ThP May 2019
-        self._NCLASSES = string.atoi(self.nclasses.get())  # ThP May 2019
-        self._RMSDUR = string.atof(self.wdutxt.get())
-        self._RMSLIM = string.atof(self.rmstxt.get())
-        self._C_WIDTH = string.atoi(self.w_canvas.get())
-        self._C_HEIGHT = string.atoi(self.h_canvas.get())
+        self._NCLASSES = int(self.nclasses.get())  # ThP May 2019
+        self._RMSDUR = float(self.wdutxt.get())
+        self._RMSLIM = float(self.rmstxt.get())
+        self._C_WIDTH = int(self.w_canvas.get())
+        self._C_HEIGHT = int(self.h_canvas.get())
+        self._MANUALGAMMA = self.cgchoice.get()
+        self._GAMMA = float(self.sgamma.get())
+        self._CONTRENH = float(self.scontrenh.get())
         self.save_rows = self.savechoice.get()
         if (self.sepchoice.get() == 0):
             self._SEP = "\t"
@@ -233,10 +261,13 @@ class GlobVariables:
 
     def reset(self):
         self.encoding.set(DEFAULT_ENCODING)
-        self.w_canvas.set(`DEFAULT_CANVASWIDTH`)
-        self.h_canvas.set(`DEFAULT_CANVASHEIGHT`)
-        self.rmstxt.set(`DEFAULT_RMS`)
-        self.wdutxt.set(`DEFAULT_WINDOWMS`)
+        self.w_canvas.set(repr(DEFAULT_CANVASWIDTH))
+        self.h_canvas.set(repr(DEFAULT_CANVASHEIGHT))
+        self.sgamma.set(repr(round(DEFAULT_GAMMA,2)))
+        self.scontrenh.set(repr(round(DEFAULT_CONTRAST_ENH,2)))
+        self.rmstxt.set(repr(DEFAULT_RMS))
+        self.wdutxt.set(repr(DEFAULT_WINDOWMS))
+        self.cgchoice.set(MANUAL_GAMMA)
         self.trigchoice.set(DEFAULT_TRIGGER)
         self.reversetriggerchoice.set(DEFAULT_REVERSETRIGGER)
         self.removeDCchoice.set(DEFAULT_REMOVEDC)
@@ -248,7 +279,7 @@ class GlobVariables:
         self.nclasses.set(DEFAULT_NCLASSES)  # ThP May 2019
         self.savechoice.set(DEFAULT_SAVEFMT)
         self.sepchoice.set(DEFAULT_SEP)
-        self.timetxt.set(`DEFAULT_TIMEOUT`)
+        self.timetxt.set(repr(DEFAULT_TIMEOUT))
         self.timeout = DEFAULT_TIMEOUT
         self.timechoice.set(DEFAULT_TIMEOUTSRC)
         self.blnkchoice.set(DEFAULT_BLINK)
@@ -282,18 +313,18 @@ class GlobVariables:
             return
 
         try:  # WINDOWS #
-            rkey = _winreg.CreateKey(_winreg.HKEY_CURRENT_USER,CV_REGISTRY_KEY)
-            self.lastfolder = _winreg.QueryValueEx(rkey, "LastFolder")[0]
-            _winreg.CloseKey(rkey)
+            rkey = winreg.CreateKey(winreg.HKEY_CURRENT_USER,CV_REGISTRY_KEY)
+            self.lastfolder = winreg.QueryValueEx(rkey, "LastFolder")[0]
+            winreg.CloseKey(rkey)
         except WindowsError:  # nonexistent key or error reading registry
             self.lastfolder = ""  # an empty string to return false from os.path.exists()
 
         if (not os.path.exists(self.lastfolder)):  # path not available (deleted, on removable media..)
             try:  # retrieve user "home" from the registry
-                dkey = _winreg.OpenKey(_winreg.HKEY_CURRENT_USER, "Volatile Environment\\")
-                homedrive = _winreg.QueryValueEx(dkey, "HOMEDRIVE")[0]
-                homepath = _winreg.QueryValueEx(dkey, "HOMEPATH")[0]
-                _winreg.CloseKey(dkey)
+                dkey = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Volatile Environment\\")
+                homedrive = winreg.QueryValueEx(dkey, "HOMEDRIVE")[0]
+                homepath = winreg.QueryValueEx(dkey, "HOMEPATH")[0]
+                winreg.CloseKey(dkey)
                 self.lastfolder = homedrive + homepath
             except WindowsError:  # nonexistent key or error reading registry
                 self.lastfolder = "."
@@ -304,7 +335,7 @@ class GlobVariables:
 def logmsg(logtext):
     # added encoding to deal with printing out non-ascii path components
     try:
-        gv.logfile.write(logtext.encode(gv.char_encoding, 'replace') + "\n")
+        gv.logfile.write(logtext + "\n")
         gv.logfile.flush()
     except:
         pass  # in case logfile isn't working yet
@@ -315,7 +346,7 @@ def logmsg(logtext):
 #
 def exiterror(errtext):
     logmsg("**ERROR: " + errtext)
-    tkMessageBox.showerror("CheckVocal error", errtext)
+    tkinter.messagebox.showerror("CheckVocal error", errtext)
     global_quit()
 
 
@@ -336,7 +367,7 @@ def myreadlines(f):
 # Based on code from Chapter 10 of 'An Introduction to Tkinter' by F. Lundh
 # http://www.pythonware.com/library/tkinter/introduction/dialog-windows.htm
 #
-class ContDialog(tkSimpleDialog.Dialog):
+class ContDialog(tkinter.simpledialog.Dialog):
 
     def __init__(self, parent, title=None, p_time="UNKNOWN"):
         Toplevel.__init__(self, parent)
@@ -436,7 +467,7 @@ class SetupWindow(Toplevel):
         # self.transient(parent) # cannot be transient, parent is root (withdrawn)
         self.parent = parent
         self.filename_prompt = "DMDX results file:"
-        self.setup_window(u"CheckVocal setup")
+        self.setup_window("CheckVocal setup")
 
     def setup_window(self, windowtitle):
         self.title(windowtitle)
@@ -456,10 +487,17 @@ class SetupWindow(Toplevel):
         self.timeoutOK = BooleanVar()
         self.timeoutOK.set(True)
         self.timeoutOK.trace("w", self.mayproceed)
+        self.gammaOK = BooleanVar()
+        self.gammaOK.set(True)
+        self.gammaOK.trace("w", self.mayproceed)
+        self.contrenhOK = BooleanVar()
+        self.contrenhOK.set(True)
+        self.contrenhOK.trace("w", self.mayproceed)
         #
         self.pack_actionbuttons_row()
         self.pack_workmode_row()
         self.pack_encoding_row()
+        self.pack_imagecg_row()
         self.pack_wavedisplay_row()
         self.pack_voxtrigger_row()
         self.pack_separator_row()
@@ -545,19 +583,14 @@ class SetupWindow(Toplevel):
         self.rlabel2 = Label(self.encF2, text="Character encoding:")
         self.rlabel2.config(width=20, font=gv.mainfont, anchor="e")
         self.rlabel2.pack(side="left")
-        self.encodingmenu2 = apply(OptionMenu, (self.encF2, gv.encoding) + tuple(ENCODING_OPTIONS))  # from http://effbot.org/tkinterbook/optionmenu.htm
+        self.encodingmenu2 = OptionMenu(*(self.encF2, gv.encoding) + tuple(ENCODING_OPTIONS))  # from http://effbot.org/tkinterbook/optionmenu.htm
         self.encodingmenu2.config(width=15, font=gv.mainfont)
         self.encodingmenu2.pack(side="left")
-        #self.extraopt = Frame(self.encF2)
         self.remdup = Checkbutton(self.encF2, text="Remove consecutive repeated items", variable=gv.remove_duplicates)  #
         self.remdup.config(font=gv.mainfont)
         self.remdup.pack(side="left", anchor="s", padx=35)
-        #self.estring = Checkbutton(self.encF2, text="Enter user string instead of accuracy", variable=gv.enterstring)  #
-        #self.estring.config(font=gv.mainfont)
-        #self.estring.pack(side="top", anchor="s")
-        #self.extraopt.pack(side="left", anchor="s", padx=35)
         self.encF2.pack(side="bottom", anchor="w")
-
+    
     def pack_wavedisplay_row(self):
         self.canvasF7 = Frame(self)
         self.rlabel71 = Label(self.canvasF7, text="Wave display:")
@@ -576,6 +609,33 @@ class SetupWindow(Toplevel):
         self.rlabel73.config(width=10, font=gv.mainfont, anchor="w")
         self.rlabel73.pack(side="left")
         self.canvasF7.pack(side="bottom", anchor="w", pady=gv.scale(5))
+
+    def pack_imagecg_row(self):
+        # New feature with options in version 4 to adjust spectrogram image gamma and contrast
+        self.imgcgF77 = Frame(self)
+        self.rlabel74 = Label(self.imgcgF77, text="Spectrogram display:")
+        self.rlabel74.config(width=20, anchor="e", font=gv.mainfont)
+        self.rlabel74.pack(side="left")
+        self.cgchoice1 = Radiobutton(self.imgcgF77, text="Auto", variable=gv.cgchoice, value=0, command=self.imgcgauto)
+        self.cgchoice1.config(font=gv.mainfont)
+        self.cgchoice1.pack(side="left", anchor="s")
+        self.cgchoice2 = Radiobutton(self.imgcgF77, text="Manual", variable=gv.cgchoice, value=1, command=self.imgcgman)
+        self.cgchoice2.config(font=gv.mainfont)
+        self.cgchoice2.pack(side="left", anchor="s")
+        vcmd = (self.register(self.validate1dec),'%P','%W')
+        self.rlabel74 = Label(self.imgcgF77, text="Gamma:")
+        self.rlabel74.config(width=8, font=gv.mainfont, anchor="w")
+        self.rlabel74.pack(side="left")
+        self.tentry74 = Spinbox(self.imgcgF77, textvariable=gv.sgamma, from_=MIN_GAMMA, to=MAX_GAMMA, increment=0.05, validate="key", validatecommand=vcmd )
+        self.tentry74.config(width=5, font=gv.mainfont)
+        self.tentry74.pack(side="left")
+        self.rlabel75 = Label(self.imgcgF77, text="Contrast:")
+        self.rlabel75.config(width=10, font=gv.mainfont, anchor="w")
+        self.rlabel75.pack(side="left")
+        self.tentry75 = Spinbox(self.imgcgF77, textvariable=gv.scontrenh, from_=MIN_CONTRENH, to=MAX_CONTRENH, increment=0.05, validate="key", validatecommand=vcmd )
+        self.tentry75.config(width=4, font=gv.mainfont)
+        self.tentry75.pack(side="left")
+        self.imgcgF77.pack(side="bottom", anchor="w", pady=gv.scale(5))
 
     def pack_voxtrigger_row(self):
         self.rmsF3 = Frame(self)
@@ -734,6 +794,10 @@ class SetupWindow(Toplevel):
         self.status = 0  # startup
         self.trigdmdx()
         self.timedmdx()
+        if gv.cgchoice.get():
+            self.imgcgman()
+        else:
+            self.imgcgauto()
         self.focus_force()
         self.get_filename()
 
@@ -744,6 +808,7 @@ class SetupWindow(Toplevel):
         self.rlabel1.config(state=DISABLED)
         self.rlabel10.config(state=DISABLED)
         self.rmessage1.config(state=DISABLED)
+        self.fileOK.set(True)
         # timeout should also not be changed once started, to prevent inconsistencies
         self.rlabel51.config(state=DISABLED)
         self.rlabel52.config(state=DISABLED)
@@ -757,6 +822,11 @@ class SetupWindow(Toplevel):
         self.spinn2a.config(state=DISABLED)
         #
         self.cbutton01.config(state=DISABLED)  # no reset
+        self.gammaOK.set(True)
+        if gv.cgchoice.get():
+            self.imgcgman()
+        else:
+            self.imgcgauto()
         self.update()
 
     def proceed(self, c_event=None):
@@ -781,12 +851,27 @@ class SetupWindow(Toplevel):
         self.fileOK.set(False)
         self.timedmdx()
         self.trigdmdx()
+        self.imgcgauto()
 
     def saveazk(self):
         self.savebox95.config(state="disabled")
 
     def saveother(self):
         self.savebox95.config(state="normal")
+
+    def imgcgauto(self):
+        self.rlabel74.config(state="disabled")
+        self.tentry74.config(state="disabled")
+        self.rlabel75.config(state="disabled")
+        self.tentry75.config(state="disabled")
+        gv.cgchoice.set(0)
+
+    def imgcgman(self):
+        self.rlabel74.config(state="normal")
+        self.tentry74.config(state="normal")
+        self.rlabel75.config(state="normal")
+        self.tentry75.config(state="normal")
+        gv.cgchoice.set(1)
 
     def trigdmdx(self):
         self.revtrigC.config(state="disabled")
@@ -853,8 +938,43 @@ class SetupWindow(Toplevel):
         except ValueError:
             return None
 
+    def vset(self,vvar,tfval):
+        if vvar=="gamma":
+            self.gammaOK.set(tfval)
+        elif vvar=="contrenh":
+            self.contrenhOK.set(tfval)
+        else:
+            pass
+
+    def validate1dec(self, P, W):
+        if W[-16:]=="!frame4.!spinbox":
+            vvar = "gamma"
+            minv = MIN_GAMMA
+            maxv = MAX_GAMMA
+        elif W[-17:]=="!frame4.!spinbox2":
+            vvar = "contrenh"
+            minv = MIN_CONTRENH
+            maxv = MAX_CONTRENH
+        else:
+            vvar = "unknown"
+            print(W)
+            raise ValueError
+        if (P==""):
+            self.vset(vvar,False)
+            return True
+        try:
+            f = float(P)
+        except:
+            self.vset(vvar,False)
+            return True
+        if f >= minv and f <= maxv:
+            self.vset(vvar,True)
+        else:
+            self.vset(vvar,False)
+        return True
+
     def mayproceed(self, *dummy):
-        if (self.fileOK.get() and self.timeoutOK.get()):
+        if (self.fileOK.get() and self.timeoutOK.get() and self.gammaOK.get()):
             self.cbutton0.config(state="normal")
         else:
             self.cbutton0.config(state="disabled")
@@ -862,9 +982,9 @@ class SetupWindow(Toplevel):
     def save_expdir(self):
         if _WINDOWS_:
             try:  # save selected expdir as last folder and close registry key
-                rkey = _winreg.OpenKey(_winreg.HKEY_CURRENT_USER, CV_REGISTRY_KEY, 0, _winreg.KEY_SET_VALUE)
-                _winreg.SetValueEx(rkey, "LastFolder", 0, _winreg.REG_SZ, gv.expdir)
-                _winreg.CloseKey(rkey)
+                rkey = winreg.OpenKey(winreg.HKEY_CURRENT_USER, CV_REGISTRY_KEY, 0, winreg.KEY_SET_VALUE)
+                winreg.SetValueEx(rkey, "LastFolder", 0, winreg.REG_SZ, gv.expdir)
+                winreg.CloseKey(rkey)
             except:  # failed to update registry
                 msgwindow.display("Failed to update registry with selected folder\n")
                 # logfile not open yet, so cannot use logmsg
@@ -882,7 +1002,7 @@ class SetupWindow(Toplevel):
                 # logfile not open yet, so cannot use logmsg
 
     def get_filename(self, c_event=None):
-        filename = tkFileDialog.askopenfilename(parent=self.parent, initialdir=gv.lastfolder,
+        filename = tkinter.filedialog.askopenfilename(parent=self.parent, initialdir=gv.lastfolder,
                                                 filetypes=[('DMDX data files', '*.azk')],
                                                 title="Choose a DMDX results file")
         if (len(filename) > 0):
@@ -908,10 +1028,10 @@ class SetupWindow_Files(SetupWindow):
         # self.transient(parent) # cannot be transient, parent is root (withdrawn)
         self.parent = parent
         self.filename_prompt = "Audio files location:"
-        self.setup_window(u"CheckVocal files setup")
+        self.setup_window("CheckVocal files setup")
 
     def get_filename(self, c_event=None):
-        filename = tkFileDialog.askdirectory(parent=self.parent, initialdir=gv.lastfolder,
+        filename = tkinter.filedialog.askdirectory(parent=self.parent, initialdir=gv.lastfolder,
                                              title="Choose the folder with your audio files")
         if (len(filename) > 0):
             gv.expdir = filename + "/"
@@ -995,12 +1115,14 @@ class SetupWindow_Files(SetupWindow):
     def startup(self):
         self.status = 0  # startup
         gv.savechoice.set(0)
+        gv.cgchoice.set(0)
         gv.trigchoice.set(1)
         gv.timechoice.set(1)
         self.trignew()
         self.timenew()
         gv.savedate.set(0)
         gv.savetime.set(0)
+        self.imgcgauto()
         self.focus_force()
         self.get_filename()
         ## need to allow selecting or disabling the -ans file somewhere
@@ -1025,6 +1147,10 @@ class SetupWindow_Files(SetupWindow):
         self.tentry5.config(state=DISABLED)
         #
         self.cbutton01.config(state=DISABLED)  # no reset
+        if gv.cgchoice.get():
+            self.imgcgman()
+        else:
+            self.imgcgauto()
         self.update()
 
     def reset(self):
@@ -1032,6 +1158,7 @@ class SetupWindow_Files(SetupWindow):
         self.fileOK.set(False)
         self.timenew()
         self.trignew()
+        self.imgcgauto()
 
 
 ############################################################################
@@ -1043,8 +1170,7 @@ class CheckWaves(Toplevel):
     ## definitions of Tkinter/Snack callback functions
 
     def interrupt(self, event=None):  # exit without saving data and without cleaning up
-        self.s.stop()
-        self.s.flush()
+        if self.playobject.is_playing(): self.playobject.stop()
         cv_process.statusfile1.close()
         cv_process.statusfile2.close()
         self.quit()
@@ -1052,20 +1178,23 @@ class CheckWaves(Toplevel):
         time.sleep(0.5)  # stupid, but Tkinter may hang if parent process dies before everything is cleaned up
 
     def playleft(self, event=None):  # play sound file up to the RT mark
-        self.s.stop()
-        self.s.play(end=int(gv.SRATE * abs(self.rt)))
+        if self.playobject.is_playing(): self.playobject.stop()
+        self.playobject = sa.play_buffer(self.wavevector[:int(gv.SRATE * abs(self.rt))],1,2,self.intsrate)
+        #self.s.play(end=int(gv.SRATE * abs(self.rt)))
 
     def playright(self, event=None):  # play sound file from the RT mark on
-        self.s.stop()
-        self.s.play(start=int(gv.SRATE * abs(self.rt)))
+        if self.playobject.is_playing(): self.playobject.stop()
+        self.playobject = sa.play_buffer(self.wavevector[int(gv.SRATE * abs(self.rt)):],1,2,self.intsrate)
+        gv.snd = self.snd
+        #self.s.play(start=int(gv.SRATE * abs(self.rt)))
 
     def goback(self, event=None):  # go to the previous file
         if ((not gv._ENTERSTRING) or (gv._ENTERSTRING and self.TextEnter())): # don't go back with an invalid text field
-            self.s.stop()
+            if self.playobject.is_playing(): self.playobject.stop()
             save_index = cv_process.current_index
             cv_process.current_index -= 1
             while ((cv_process.current_index >= 0) and
-                   ((gv.subj_ind[cv_process.current_index] not in gv.sub_trials.keys())  # skip removed subject trials
+                   ((gv.subj_ind[cv_process.current_index] not in list(gv.sub_trials.keys()))  # skip removed subject trials
                     or (gv.listofanswers[cv_process.current_index] == _NO_SOUND_FLAG_))  # skip trials with no sound
             ):
                 cv_process.current_index -= 1
@@ -1106,11 +1235,11 @@ class CheckWaves(Toplevel):
             newrt = (self.nclass*gv._CLASSMULT + self.absrt)*self.signrt
         gv.sub_trials[gv.subj_ind[cv_process.current_index]][gv.trial_ind[cv_process.current_index]] = (self.item, newrt)
         gv.listoftrials[cv_process.current_index] = (self.item, newrt)
-        cv_process.statusfile2.write(`cv_process.current_index` + "\t" + `self.item` + "\t" + gv.listoffiles[cv_process.current_index].encode(gv.char_encoding, 'replace') + "\t" + "%.1f" % (newrt) + "\n")
+        cv_process.statusfile2.write(repr(cv_process.current_index) + "\t" + repr(self.item) + "\t" + gv.listoffiles[cv_process.current_index] + "\t" + "%.1f" % (newrt) + "\n")
         cv_process.statusfile2.flush()
 
     def snd_ok(self, event=None):  # mark response as correct and move on to the next file
-        self.s.stop()
+        if self.playobject.is_playing(): self.playobject.stop()
         if (gv._ENTERSTRING or gv._DOCLASSIFY): # This should never happen, the "correct" button does not exist in these modes
             # https://stackoverflow.com/questions/3056048/filename-and-line-number-of-python-script
             exiterror("Internal error #001 (version %s) at line %d\nPlease report to %s"%(VERSION,inspect.getframeinfo(inspect.currentframe()).lineno,EMAIL))
@@ -1124,7 +1253,7 @@ class CheckWaves(Toplevel):
         self.advance_file()
 
     def not_ok(self, event=None):  # mark this file as an incorrect response and move on
-        self.s.stop()
+        if self.playobject.is_playing(): self.playobject.stop()
         if (gv._ENTERSTRING or gv._DOCLASSIFY): # This should never happen, the "wrong" button does not exist in these modes
             exiterror("Internal error #002 (version %s) at line %d\nPlease report to %s"%(VERSION,inspect.getframeinfo(inspect.currentframe()).lineno,EMAIL))
         gv.listofproblems.append(gv.listoffiles[cv_process.current_index])
@@ -1136,7 +1265,7 @@ class CheckWaves(Toplevel):
         self.advance_file()
 
     def timedout(self, event=None):  # mark this file as not containing a response (timed out)
-        self.s.stop()
+        if self.playobject.is_playing(): self.playobject.stop()
         gv.listofproblems.append(gv.listoffiles[cv_process.current_index])
         #self.get_itemrt()
         # Set RT to negative timeout value to indicate no response
@@ -1164,10 +1293,10 @@ class CheckWaves(Toplevel):
             cv_process.N_done += 1
             cv_process.statusfile1.seek(0)
             cv_process.statusfile1.truncate()
-            cv_process.statusfile1.write(`cv_process.current_index` + " " + `cv_process.N_done` + "\n")
+            cv_process.statusfile1.write(repr(cv_process.current_index) + " " + repr(cv_process.N_done) + "\n")
             cv_process.statusfile1.flush()
             while ((cv_process.current_index < gv.totaltrials)
-                   and ((gv.subj_ind[cv_process.current_index] not in gv.sub_trials.keys())  # skip removed subject trials
+                   and ((gv.subj_ind[cv_process.current_index] not in list(gv.sub_trials.keys()))  # skip removed subject trials
                         or (gv.listofanswers[cv_process.current_index] == _NO_SOUND_FLAG_))  # skip trials with no sound
             ):
                 cv_process.current_index += 1
@@ -1179,7 +1308,7 @@ class CheckWaves(Toplevel):
                 self.load_new_file()
             else:
                 gv.done = 1
-                self.s.stop()
+                if self.playobject.is_playing(): self.playobject.stop()
                 self.s.flush()
                 self.destroy()
                 time.sleep(0.5)
@@ -1203,8 +1332,41 @@ class CheckWaves(Toplevel):
         else:
             self.zstart = absrtis - zside
             self.zend = absrtis + zside
-        self.wave = self.c.create_waveform(0, 0, sound=self.s, start=self.zstart, end=self.zend, width=gv._C_WIDTH, height=gv._C_HEIGHT, zerolevel=1)
-        self.spec = self.c.create_spectrogram(0, gv._C_HEIGHT + gv._C_DIST, sound=self.s, start=self.zstart, end=self.zend, width=gv._C_WIDTH, height=gv._C_HEIGHT)
+        # Original zoom calculations based on samples; going back and forth instead of rewriting to avoid breaking other things 
+        zsnd = self.snd.extract_part(from_time=self.is2ms(self.zstart)/1000.0, to_time=self.is2ms(self.zend)/1000.0)
+        zsamples = zsnd.n_samples
+        ### create waveform image
+        zsnd.scale_peak(new_peak=MAXINT2E15-1) # in place!
+        wfz = np.full((gv._C_HEIGHT,gv._C_WIDTH),MAXIMGU8) # empty canvas
+        xf = (np.arange(zsamples)*gv._C_WIDTH/zsamples).astype(int) # x (in pixels) for each sample
+        yf = ((MAXINT2E15-zsnd.values[0,:])/2.0/MAXINT2E15*(gv._C_HEIGHT-1)).astype(int) # sample vertical offset 
+        yft = ((yf[1:]+yf[:-1])/2).astype(int) # mean of successive samples
+        wfz[int(gv._C_HEIGHT/2-1),:] = int(3*MAXINT2E15/4) # horizontal axis
+        wfz[yf[0],xf[0]] = 0 # plot first sample
+        # For each sample, plot a two-part line from the current sample to the next one:
+        # The first half line at the current x offset, the second half line at the next x offset
+        # This is done to ensure that the space between every two samples is filled
+        for i in range(zsamples-1): 
+            wfz[yf[i]:yft[i],xf[i]]=0     # vertical segment from current to half of the distance to the next at the current x
+            wfz[yft[i]:yf[i+1],xf[i+1]]=0 # vertical segment from the half distance to the next sample at the next x
+        timg = Image.fromarray(wfz.astype(np.uint8)) # temporary object in PIL format
+        self.wimg = ImageTk.PhotoImage(Image.composite(Image.new('RGB', size=(gv._C_WIDTH,gv._C_HEIGHT), color=default_bg), timg.convert("RGB"), timg))
+        ### create spectrogram image
+        zsnd.pre_emphasize() # in place!
+        spdb = -10*np.log10(zsnd.to_spectrogram().values)
+        spdb = MAXIMGU8*(spdb-spdb.min())/(spdb.max()-spdb.min())
+        if gv._MANUALGAMMA:
+            gamma = gv._GAMMA
+            contrenh = gv._CONTRENH
+        else:
+            gamma = np.log(0.5*MAXIMGU8)/np.log(np.mean(spdb))
+            contrenh = DEFAULT_CONTRAST_ENH
+        spdbi = np.power(spdb,gamma).clip(0,MAXIMGU8).astype(np.uint8)
+        img = Image.fromarray(spdbi).transpose(method=Image.Transpose.FLIP_TOP_BOTTOM).resize((gv._C_WIDTH,gv._C_HEIGHT),resample=Image.Resampling.BICUBIC) # NEAREST BILINEAR BICUBIC
+        self.cimg = ImageTk.PhotoImage(ImageEnhance.Contrast(img).enhance(contrenh))
+        # plot images on canvas
+        self.wave = self.c.create_image(0, 0, anchor=NW, image=self.wimg)
+        self.spec = self.c.create_image(0, gv._C_HEIGHT, anchor=NW, image=self.cimg)
         self.zdisp.config(text=("%1d" % self.zoom))
         self.c.update()
 
@@ -1242,15 +1404,19 @@ class CheckWaves(Toplevel):
         self.c.update()
 
     def load_new_file(self):  # load new sound file and update display
-        self.s = Sound(load=gv.expdir + gv.listoffiles[cv_process.current_index])
-        if (self.s["channels"] > 1):  # added for CheckFiles because existing audio files might contain more channels
+        self.snd = parselmouth.Sound(gv.expdir + gv.listoffiles[cv_process.current_index])
+        if (self.snd.n_channels > 1):  # added for CheckFiles because existing audio files might contain more channels
             logmsg("Converting %s from stereo (%i channels to 1)" % (
-            gv.listoffiles[cv_process.current_index], self.s["channels"]))
-            self.s.convert(channels=1)
-        if (gv._REMOVEDC): self.s.filter(self.DCfilt, continuedrain=0)
+                gv.listoffiles[cv_process.current_index], self.snd.n_channels))
+            self.snd = self.snd.convert_to_mono()
+        if (gv._REMOVEDC):
+            self.snd.values = lfilter(self.DCfilt[0], self.DCfilt[1], self.snd)
+        self.wavevector = ((MAXINT2E15-1)*self.snd.values[0,:]).astype(np.int16)
         self.zoom = 1
-        gv.SRATE = self.s.info()[1] / 1000.0
-        self.nsamples = self.s.length()
+        self.playobject = sa.PlayObject(play_id=0)
+        gv.SRATE = self.snd.sampling_frequency / 1000.0
+        self.intsrate = int(self.snd.sampling_frequency)
+        self.nsamples = self.snd.n_samples
         self.get_itemrt(new=True)
         dummy, self.remember_rt = gv.original_listoftrials[cv_process.current_index]  # to allow reverting
         oldlabel = self.newlabel
@@ -1258,11 +1424,15 @@ class CheckWaves(Toplevel):
         self.progress.configure(text="Item %i (%i of %i)  " % (
         gv.listoftrials[cv_process.current_index][0], cv_process.N_done + 1, cv_process.N_todo))
         self.progress.update()
+        self.sndint = self.snd.to_intensity(time_step=SNDINT_TIMESTEP).values[0,:]
+        self.intlen = len(self.sndint)
+        self.intoffs = (self.nsamples/gv.SRATE - self.intlen*SNDINT_TIMESTEP*1000)/2
+        #
         if (gv._ENTERSTRING):
             if ((self.rt == -1) or (self.rt == -gv.timeout)):
                 gv.userstring.set("")
             else:
-                gv.userstring.set(`self.rt`)
+                gv.userstring.set(repr(self.rt))
         elif (gv._RETRIGGER == 1 and gv.listoffiles[cv_process.current_index] not in gv.listofloaded):
             # if (self.rt != 0):
             #     signrt = self.rt / abs(self.rt)
@@ -1296,7 +1466,7 @@ class CheckWaves(Toplevel):
             self.focus()
 
     def retrigger(self, event=None, start=0):
-        self.s.stop()
+        if self.playobject.is_playing(): self.playobject.stop()
         self.hide_lines()
         self.c.update()
         if (gv._ENTERSTRING): return  # do not affect RT when in custom-string mode
@@ -1319,7 +1489,7 @@ class CheckWaves(Toplevel):
         self.retrigger(start=self.rt)
 
     def revertRT(self, event=None):
-        self.s.stop()
+        if self.playobject.is_playing(): self.playobject.stop()
         if (gv._ENTERSTRING): return  # do not affect RT when in custom-string mode
         #self.get_itemrt() # this should not be necessary
         # if (self.rt != 0):
@@ -1375,7 +1545,7 @@ class CheckWaves(Toplevel):
         self.draw_lines()
 
     def mouseclick(self, event):  # update RT with position of mouse click
-        self.s.stop()
+        if self.playobject.is_playing(): self.playobject.stop()
         x = event.x
         y = event.y
         if (gv._ENTERSTRING): return  # do not affect RT when in custom-string mode
@@ -1396,7 +1566,7 @@ class CheckWaves(Toplevel):
                 self.playright()
 
     def TextEnter(self, event=None):
-        self.s.stop()
+        if self.playobject.is_playing(): self.playobject.stop()
         #self.get_itemrt()
         ustr = gv.userstring.get()
         if (ustr.isdigit() and (len(ustr) < 10)):  # store number
@@ -1417,7 +1587,7 @@ class CheckWaves(Toplevel):
             return False
 
     def classifyN(self, N, event=None):  # code based on snd_ok ; multiply RT by N million
-        self.s.stop()
+        if self.playobject.is_playing(): self.playobject.stop()
         #self.get_itemrt()
         gv.listofproblems.append(gv.listoffiles[cv_process.current_index])
         self.nclass = N
@@ -1429,122 +1599,70 @@ class CheckWaves(Toplevel):
 
     ## definitions of sound data calculation functions
 
-    def ms2is(self, ms):  # milliseconds to samples
+    def ms2is(self, ms):  # milliseconds to wave samples
         return (int(float(ms) * gv.SRATE))
 
-    def is2ms(self, ns):  # samples to milliseconds
+    def is2ms(self, ns):  # wave samples to milliseconds
         return (float(ns) / gv.SRATE)
+
+    def ms2ii(self, ms):  # milliseconds to intensity samples
+        return (int(float(ms) / (SNDINT_TIMESTEP * 1000.0) ))
+
+    def ii2ms(self, ns):  # intensity samples to milliseconds
+        return (float(ns) * SNDINT_TIMESTEP * 1000.0 )
 
     def trigger(self, start, reverse=False):
 
         if (gv._ENTERSTRING): return  # do not affect RT when in custom-string mode
-        # This should not be necessary but you never know... better safe than crashed
-        if (self.s.length() > self.ssqr.length()):
-            self.ssqr.length(self.s.length())
-            self.srms.length(self.s.length())
-        #
-        inidur = self.ms2is(gv._RMSDUR)  # interval for RMS calculation, in samples
-        tval = math.pow(10.0, gv._RMSLIM / 10.0)  # temporary variable
-        current_trigger = tval * inidur  # sum of squares threshold
-        minval = math.sqrt(tval)  # min amplitude threshold
-        slen = self.s.length()
-        #
+
         start = abs(start)  # to make sure incorrect responses are properly retriggered
-        nstart = self.ms2is(start)
+        nstart = max(0,self.ms2ii(start-self.intoffs))
         if reverse:  # backward trigger (offset time)
             direction = -1
-            refpoint = slen
+            refpoint = self.intlen
             endpoint = 0
-            if (nstart == 0): nstart = slen - 1
+            if (nstart == 0): nstart = self.intlen
         else:  # regular trigger (onset time)
             direction = 1
             refpoint = 0
-            endpoint = slen
+            endpoint = self.intlen
         #
         # If not starting at the edge then we need to skip the current event
         startcheck = nstart
+        self.detrigger = max((gv._RMSLIM-6,(gv._RMSLIM-self.sndint.min())/2)) # here because RMSLIM can be readjusted on the fly
         if (nstart != refpoint):
-            stinidur = startcheck + inidur * direction
-            if ((stinidur < 0) or (stinidur > slen)):
-                return (start)  # not enought points to check further
-            # Stuff the sliding accumulator of sums of squares with enough samples
-            self.srms.sample(stinidur, 0)
-            for ns in range(startcheck, stinidur + direction, direction):
-                ss = self.s.sample(ns)
-                sss = ss * ss
-                self.ssqr.sample(ns, sss)
-                nval = self.srms.sample(stinidur) + sss
-                self.srms.sample(stinidur, nval)
-            # Calculate each new value by adding one, subtracting one, sum of squares
-            # Don't calculate average, or dB (logarithm) for each sample, it's faster
-            # to have the threshold converted to a sum of squares value and test that
-            inv_thres = current_trigger * gv._DETRIGGER
-            drop_offset = direction * (inidur + 1)
-            for ns in range(stinidur + direction, endpoint, direction):
-                ss = self.s.sample(ns)
-                sss = ss * ss
-                self.ssqr.sample(ns, sss)
-                nval = self.srms.sample(ns - direction) - self.ssqr.sample(ns - drop_offset) + sss
-                self.srms.sample(ns, nval)
-                if (nval < inv_thres):
-                    startcheck = ns
-                    break
-            # if we go through the whole file and fail to fall below threshold
-            # then just return the original value
-            if (startcheck == nstart):
-                logmsg("Failed to detect silent interval past current RT for %s" % gv.listoffiles[
-                    cv_process.current_index])
+            if reverse:
+                detect = self.sndint[:startcheck] <= self.detrigger
+                if any(detect):
+                    startcheck = np.flatnonzero(detect)[-1]
+            else:
+                detect = self.sndint[startcheck:] <= self.detrigger
+                if any(detect):
+                    startcheck = np.argmax(detect) + startcheck
+            if (startcheck == nstart) and (not any(detect)):
+                logmsg("Failed to detect silent interval past current RT for %s" % gv.listoffiles[cv_process.current_index])
                 return (start)
             # else we can proceed from this new point on
             # END of setting up when not starting at the edge
-        # Advance quickly to the minimum amplitude that can support threshold RMS
-        # This speeds up computation greatly because it does not compute lots of
-        # squares and sums over the initial low-amplitude (RT) interval
-        for ns in range(startcheck, endpoint, direction):
-            if (self.s.sample(ns) > minval):
-                startcheck = ns
-                break
-        stinidur = startcheck + inidur * direction
-        if ((stinidur < 0) or (stinidur > slen)):
-            return (start)  # not enought points to check further
-        # Stuff the sliding accumulator of sums of squares with enough samples
-        self.srms.sample(stinidur, 0)
-        for ns in range(startcheck, stinidur + direction, direction):
-            ss = self.s.sample(ns)
-            sss = ss * ss
-            self.ssqr.sample(ns, sss)
-            nval = self.srms.sample(stinidur) + sss
-            self.srms.sample(stinidur, nval)
-        # Calculate each new value by adding one, subtracting one, sum of squares
-        # Don't calculate average, or dB (logarithm) for each sample, it's faster
-        # to have the threshold converted to a sum of squares value and test that
-        if (nval > current_trigger and (direction * (startcheck - refpoint) > inidur)):
-            drop_offset = direction * inidur
-            for ns in range(stinidur - direction, startcheck, -direction):
-                ss = self.s.sample(ns - drop_offset)
-                sss = ss * ss
-                self.ssqr.sample(ns - drop_offset, sss)
-                nval = self.srms.sample(ns + direction) - self.ssqr.sample(ns + direction) + sss
-                if (nval < current_trigger):
-                    return (self.is2ms(ns + direction))
-                else:
-                    self.srms.sample(ns, nval)
-            logmsg("Failed to reverse trigger RT for %s" % gv.listoffiles[cv_process.current_index])
-            return (self.is2ms(startcheck))
+        if reverse:
+            detect = self.sndint[:startcheck] > gv._RMSLIM
+            if any(detect):
+                ns = np.flatnonzero(detect)[-1]
         else:
-            drop_offset = direction * (inidur + 1)
-            for ns in range(stinidur + direction, endpoint, direction):
-                ss = self.s.sample(ns)
-                sss = ss * ss
-                self.ssqr.sample(ns, sss)
-                nval = self.srms.sample(ns - direction) - self.ssqr.sample(ns - drop_offset) + sss
-                if (nval > current_trigger):
-                    return (self.is2ms(ns))
-                else:
-                    self.srms.sample(ns, nval)
-            logmsg("Failed to trigger RT for %s" % (gv.listoffiles[cv_process.current_index]))
-        # if anything has failed in the previous sequence, just return the original point
-        return (start)  # except for a "next onset" request, this would be zero
+            detect = self.sndint[startcheck:] > gv._RMSLIM
+            if any(detect):
+                ns = np.argmax(detect) + startcheck
+
+        if any(detect):
+            # praat intensity is not precisely aligned to the waveform due to the applied window
+            ins = self.ii2ms(ns) + self.intoffs # RT always in milliseconds
+            return(ins)
+        else:
+            if reverse:
+                logmsg("Failed to reverse trigger RT for %s" % gv.listoffiles[cv_process.current_index])
+            else:
+                logmsg("Failed to trigger RT for %s" % (gv.listoffiles[cv_process.current_index]))
+            return (start)  # except for a "next onset" request, this would be zero
 
     ## end of sound data calculation functions
 
@@ -1552,8 +1670,6 @@ class CheckWaves(Toplevel):
         self.c.config(height=2 * gv._C_HEIGHT + gv._C_DIST, width=gv._C_WIDTH)
         self.c.coords(self.wave, 0, 0)
         self.c.coords(self.spec, 0, gv._C_HEIGHT + gv._C_DIST)
-        self.c.itemconfig(self.wave, width=gv._C_WIDTH, height=gv._C_HEIGHT)
-        self.c.itemconfig(self.spec, width=gv._C_WIDTH, height=gv._C_HEIGHT)
         self.c.coords(self.grayline1, 0, 0, 0, gv._C_HEIGHT)
         self.c.coords(self.grayline2, 0, gv._C_HEIGHT + gv._C_DIST, 0, gv._C_DIST + 2 * gv._C_HEIGHT)
         self.c.coords(self.redline1, 0, 0, 0, gv._C_HEIGHT)
@@ -1561,10 +1677,7 @@ class CheckWaves(Toplevel):
         self.c.update()
 
     def update_answer(self):
-        ##        self.newlabel=gv.listofanswers[cv_process.current_index]
-        ##        self.newlabel=unicode(gv.listofanswers[cv_process.current_index],gv.char_encoding)
-        self.newlabel = gv.listofanswers[cv_process.current_index]  # already in Unicode
-        ##
+        self.newlabel = gv.listofanswers[cv_process.current_index]
         self.anslabel.configure(text=self.newlabel, font=gv.verylargeboldfont, fg='blue')
         self.anslabel.update()
 
@@ -1577,7 +1690,6 @@ class CheckWaves(Toplevel):
         setupw.focus_force()
         self.wait_window(setupw)
         self.redraw_canvas()
-        # self.update_answer()
         self.load_new_file()  # to update sound display with possible changes (answer, DC)
 
 
@@ -1588,8 +1700,7 @@ class CheckWaves(Toplevel):
         Toplevel.__init__(self, parent)
         self.geometry("+%d+%d" % (gv.scale(100), gv.scale(50)))
         if (IconFile != "None"): self.wm_iconbitmap(IconFile)
-        initializeSnack(self)
-        self.title(u"Check DMDX vocal responses: Experiment %s" % (gv.expname))
+        self.title("Check DMDX vocal responses: Experiment %s" % (gv.expname))
 
         self.frame = Frame(self)
         self.frame.pack(pady=5)
@@ -1602,21 +1713,13 @@ class CheckWaves(Toplevel):
             time.sleep(0.5)
             return None
         ##
-        while ((gv.subj_ind[cv_process.current_index] not in gv.sub_trials.keys())  # skip removed subject trials
+        while ((gv.subj_ind[cv_process.current_index] not in list(gv.sub_trials.keys()))  # skip removed subject trials
                or (gv.listofanswers[cv_process.current_index] == _NO_SOUND_FLAG_)  # skip trials with no sound
         ):
             cv_process.current_index += 1
-        self.s = Sound()
-        self.DCfilt = Filter('iir', "-numerator", "0.99 -0.99", "-denominator", "1 -0.99")
+        self.DCfilt = (np.array([0.99,-0.99]), np.array([1.0,-0.99])) # b, a
         self.zoom = 1  # scale=1 means no zoom ; zoom=2 is a magnification x2
         self.zstart = 0
-        ####if (_RETRIGGER_): # define the variables anyway to allow on-demand retriggering
-        self.ssqr = Sound()
-        self.srms = Sound()
-        self.ssqr.configure(encoding="Float")
-        self.srms.configure(encoding="Float")
-        self.ssqr.length(2 * self.ms2is(gv.timeout))
-        self.srms.length(2 * self.ms2is(gv.timeout))
         ####
         self.ansrow = Frame(self)
         self.anslabel = Label(self.ansrow, fg='blue', font=gv.verylargeboldfont)
@@ -1644,10 +1747,11 @@ class CheckWaves(Toplevel):
         self.bind("t", self.retrigger)
         self.bind("<Escape>", self.interrupt)
         #### Set up canvas elements here, dimensions adjusted in redraw_canvas (to allow runtime changes)
-        self.c = SnackCanvas(self)
+        self.c = Canvas(self)
         self.c.bind("<ButtonPress>", self.mouseclick)
-        self.wave = self.c.create_waveform(0, 0, sound=self.s, zerolevel=1)
-        self.spec = self.c.create_spectrogram(0, 0, sound=self.s)
+        self.blankimg = ImageTk.PhotoImage(Image.new('RGB', size=(gv._C_WIDTH,gv._C_HEIGHT), color=default_bg))
+        self.wave = self.c.create_image(0, 0, anchor=NW, image=self.blankimg)
+        self.spec = self.c.create_image(0, gv._C_HEIGHT, anchor=NW, image=self.blankimg)
         self.grayline1 = self.c.create_line(0, 0, 0, 0, fill='#A89888')
         self.grayline2 = self.c.create_line(0, 0, 0, 0, fill='#C8A898')
         self.redline1 = self.c.create_line(0, 0, 0, 0, fill='red')
@@ -1712,12 +1816,12 @@ class SubjectSelect(Toplevel):
         self.destroy()
 
     def subj_select_all(self):  # select all available subjects
-        for subject in gv.sub_trials.keys():
+        for subject in list(gv.sub_trials.keys()):
             if (cv_process.subject_select[subject]):
                 self.c[subject].select()
 
     def subj_select_none(self):  # deselect all available subjects
-        for subject in gv.sub_trials.keys():
+        for subject in list(gv.sub_trials.keys()):
             if (cv_process.subject_select[subject]):
                 self.c[subject].deselect()
 
@@ -1725,7 +1829,7 @@ class SubjectSelect(Toplevel):
 
         Toplevel.__init__(self, parent)
         self.parent = parent
-        self.title(u"DMDX subject selection")
+        self.title("DMDX subject selection")
         self.geometry("+%d+%d" % (gv.scale(100), gv.scale(175)))
         if (IconFile != "None"): self.wm_iconbitmap(IconFile)
 
@@ -1738,7 +1842,7 @@ class SubjectSelect(Toplevel):
         sub_incol = 0
         self.c = {}
 
-        gv.Nsubj = len(gv.sub_ids.keys()) # was sub_trials ThP 22May20 ; this seems to get confused with duplicate IDs
+        gv.Nsubj = len(list(gv.sub_ids.keys())) # was sub_trials ThP 22May20 ; this seems to get confused with duplicate IDs
         if (gv.Nsubj > gv._SUBJ_MAX):
             logmsg("Number of subjects (%i) probably too large to fit date/PC info" % (gv.Nsubj))
         if (gv.Nsubj > gv._ONE_COL_MAX):
@@ -1746,7 +1850,7 @@ class SubjectSelect(Toplevel):
             column_length = math.ceil(gv.Nsubj / math.ceil(float(gv.Nsubj) / float(gv._SUBJ_COL)))
         ##                                       ##
         ##for subject in gv.sub_trials.keys():   ## corrected to present subjects
-        live_subjects = gv.sub_ids.keys()  ## in order of appearance in azk
+        live_subjects = list(gv.sub_ids.keys())  ## in order of appearance in azk
         for subjnum in live_subjects:  ##
             subject = gv.sub_ids[subjnum]  ##
             ##
@@ -1805,12 +1909,12 @@ class CheckVocalClass:
             else:
                 rtfitems = rtfitems[:backslashpos] + rtfitems[backslashpos + nextspacepos + 1:]
         rtfitemfile.close()
-        linepieces = string.split(rtfitems, '<')
+        linepieces = rtfitems.split('<')
         for parstr in linepieces:
-            lstr = string.lower(parstr)  # to deal with arbitrary capitalization
+            lstr = parstr.lower()  # to deal with arbitrary capitalization
             if ((len(lstr) > 2 and lstr[:2] == "t ") or (len(lstr) > 8 and lstr[:8] == "timeout ")):
                 try:
-                    self.timeout = string.atof(lstr[lstr.find(' '):lstr.find('>')])
+                    self.timeout = float(lstr[lstr.find(' '):lstr.find('>')])
                     logmsg("Setting timeout to %.1f" % (self.timeout))
                     break
                 except:
@@ -1848,7 +1952,7 @@ class CheckVocalClass:
 
         # read total subject information
         if (azklines[line][:31] == "Subjects incorporated to date: "):
-            gv.Nsubj = string.atoi(azklines[line][31:-1])  # discard newline
+            gv.Nsubj = int(azklines[line][31:-1])  # discard newline
         else:
             exiterror("General subject information not found")
 
@@ -1869,7 +1973,7 @@ class CheckVocalClass:
                     subj = gv.Nsubj
                     break
 
-            slineparts = string.split(azklines[line + 1].decode(gv.char_encoding).rstrip(), ',')  # discard newline # ThP 20130107 added .decode() to allow for possible non-latin data -- not just subject ID but also PC ID
+            slineparts = azklines[line + 1].rstrip().split(',')  # discard newline # ThP 20130107 added .decode() to allow for possible non-latin data -- not just subject ID but also PC ID
             try:
                 # ThP 20170811 recoded parsing of this line to read the first two and last field, due to added intervening fields by DMDX 5.1.5.2
                 subj_, date_, refresh_ = slineparts[:3]  # ignore DMDX/Windows versions
@@ -1878,36 +1982,36 @@ class CheckVocalClass:
                 logmsg("Insufficient fields for subject %i (Subject line messed up)" % (subjno + 1))
                 # useless data without ID, try to skip this subject
                 # assume there will always be subject, date, and refresh fields
-                subj_, date_, refresh_ = string.split(azklines[line + 1].rstrip(), ',')  # discard newline
-                ids_ = u"xxx xxx"  # so that a dummy ID will be made up below
-            s_ = string.atoi(string.split(subj_)[1])
+                subj_, date_, refresh_ = azklines[line + 1].rstrip().split(',')  # discard newline
+                ids_ = "xxx xxx"  # so that a dummy ID will be made up below
+            s_ = int(subj_.split()[1])
             if (subj_[:7] != "Subject" or subjno + 1 != s_):
-                logmsg("Unexpected subject number " + `s_` + " (expected " + `subjno + 1` + ") at line " + `line`)
+                logmsg("Unexpected subject number " + repr(s_) + " (expected " + repr(subjno + 1) + ") at line " + repr(line))
             subjno += 1
 
             splitOK = False
             try:
-                splitid = string.split(ids_)[1:]
+                splitid = ids_.split()[1:]
                 splitOK = True
             except IndexError:  # could not split into two?
-                if (len(ids_) > 3 and ids_[1:3] == u"ID"):
+                if (len(ids_) > 3 and ids_[1:3] == "ID"):
                     s_id = ids_[3:].strip()
                 else:
-                    s_id = u""
+                    s_id = ""
             if splitOK:
                 if (len(splitid) > 1):  # ID with space in it
-                    s_id = u" ".join(splitid)  # put the space back in
+                    s_id = " ".join(splitid)  # put the space back in
                 else:  # normal case
                     s_id = splitid[0]  # [0] because a list was returned by split
 
             if (ids_[1:3] != "ID" or len(s_id) < 1):
-                s_id = u"SID%04i" % s_
+                s_id = "SID%04i" % s_
                 logmsg("Could not determine ID for subject %i at line %i, will use %s" % (s_, line + 1, s_id))
                 self.subject_select[s_id] = 0  # deactivate subject because wav filenames need a real ID
             else:
                 self.subject_select[s_id] = 1
 
-            for s_temp in gv.sub_ids.keys():
+            for s_temp in list(gv.sub_ids.keys()):
                 if (s_id == gv.sub_ids[s_temp]):
                     logmsg("Duplicate subject ID %s (subjects %i and %i)" % (s_id, gv.sub_nums[s_id], s_))
                     # Deal with duplicate IDs, first in v. 1.6.0
@@ -1921,24 +2025,24 @@ class CheckVocalClass:
                     # duplicate IDs probably mean a repeated run (and overwritten wavs)
                     # dictionary values will be replaced (as they should), hopefully without side-effects
 
-            logmsg("Subject " + `subjno` + ", ID=" + s_id)
+            logmsg("Subject " + repr(subjno) + ", ID=" + s_id)
             gv.sub_ids[subjno] = s_id
             gv.sub_dates[s_id] = date_
             gv.sub_refresh[s_id] = refresh_
             gv.sub_nums[s_id] = subjno
 
-            RTheaders = string.split(azklines[line + 2].rstrip())
+            RTheaders = azklines[line + 2].rstrip().split()
             if (len(RTheaders) > 2):  # Recognize a 3rd column of COT data (clock-on-trial)
                 if (RTheaders[2] == "COT"):
                     if (gv._COT_ == 0):
                         logmsg("COT header detected")
                     gv._COT_ = 1
                 else:
-                    logmsg("Unknown header identifier at line " + `line + 2`)
+                    logmsg("Unknown header identifier at line " + repr(line + 2))
                     self.subject_select[s_id] = 0  # do not process subjects with not understood data
 
             if (RTheaders[:2] != ["Item", "RT"]):
-                logmsg("Item/RT identifier not found at line " + `line + 2`)
+                logmsg("Item/RT identifier not found at line " + repr(line + 2))
                 self.subject_select[s_id] = 0  # definitely kill the subject with unparseable data
                 # sys.exit(-1) # Do not die on problematic item/RT data;
                 # This is a problem for the subject's data but perhaps the rest of the file is OK
@@ -1952,7 +2056,7 @@ class CheckVocalClass:
                     exlines += 1
                     # catch a case of split error-report lines on non-ASCII strings ## thp 2006-10-13
                     if (line < (Nlines - 1) and len(azklines[line + 1]) > 0 and azklines[line + 1][0] != '!' and
-                            string.count(azklines[line], '"') > 0 and string.count(azklines[line + 1], '"') > 0):
+                            azklines[line].count('"') > 0 and azklines[line + 1].count('"') > 0):
                         exlines += 1
                 line += 1
             # recover from a premature break
@@ -1968,14 +2072,14 @@ class CheckVocalClass:
             for trial in azklines[startline:endline]:
                 # catch a case of split error-report lines on non-ASCII strings ## thp 2006-10-13
                 if (not (previous_line[0] == '!' and trial[0] != '!' and
-                         string.count(previous_line, '"') > 0 and string.count(trial, '"') > 0)):
+                         previous_line.count('"') > 0 and trial.count('"') > 0)):
                     if (trial[0] != '!'):
                         if (gv._COT_ == 1):  # parse correctly data even if a 3rd (COT) column is present
-                            item_, rt_, cot_ = string.split(trial)[:3]  # COT data will be ignored
+                            item_, rt_, cot_ = trial.split()[:3]  # COT data will be ignored
                         else:
-                            item_, rt_ = string.split(trial)[:2]  # need to discard possible ABORT tags
-                        item = string.atoi(item_)
-                        rt = string.atof(rt_)
+                            item_, rt_ = trial.split()[:2]  # need to discard possible ABORT tags
+                        item = int(item_)
+                        rt = float(rt_)
                         ## optionally remove repeated items ## ThP May 2014
                         if (item == previous_item and gv._REMOVEDUPLICATES):
                             junk_item = tmptrials.pop()
@@ -2037,20 +2141,20 @@ class CheckVocalClass:
             if (len(line) < 2):
                 exiterror("Empty line (%i) in answers file!" % (i))
             try:
-                item, answer = string.split(line.rstrip(), maxsplit=1)
+                item, answer = line.rstrip().split(maxsplit=1)
             except:
                 exiterror("Error reading answers file\n(problem line %i, contents %s)" % (i, line.rstrip()))
         i = 0
         try:
-            answers.sort(key=lambda (s): int(s.split()[0]))
+            answers.sort(key=lambda s: int(s.split()[0]))
         except:
             exiterror("Error sorting answer list!\nPerhaps an item number is not a number?")
-        ref_subj = gv.sub_trials.keys()[0]  # For reporting ans-inconsistencies only; might cause problems if it refers to a subject not intended to be processed; perhaps move past subject selection?
+        ref_subj = list(gv.sub_trials.keys())[0]  # For reporting ans-inconsistencies only; might cause problems if it refers to a subject not intended to be processed; perhaps move past subject selection?
         for line in answers:
-            item, answer = string.split(line.rstrip(), maxsplit=1)
-            subjitem = gv.sub_trials[gv.sub_trials.keys()[0]][i][0]
-            if (string.atoi(item) != subjitem):
-                exiterror("Item number %i (position %i) in asnwers file\n%s\ndoes not match item number %i in reference subject %i (ID %s)" % (string.atoi(item), i, ansfilename, subjitem, gv.sub_nums[ref_subj], ref_subj))
+            item, answer = line.rstrip().split(maxsplit=1)
+            subjitem = gv.sub_trials[list(gv.sub_trials.keys())[0]][i][0]
+            if (int(item) != subjitem):
+                exiterror("Item number %i (position %i) in asnwers file\n%s\ndoes not match item number %i in reference subject %i (ID %s)" % (int(item), i, ansfilename, subjitem, gv.sub_nums[ref_subj], ref_subj))
             # tmplistofanswers introduced in v.2.2.7 to enforce listing of all answers for all subjects
             # because assuming ntrials in the listoftrials by all subjects failed when subjects had skipped
             # trials before missing files in which case the skipping desynchronized trials and answers
@@ -2065,12 +2169,12 @@ class CheckVocalClass:
     def verify_audiofiles(self):
         logmsg("Verifying audio files...")
 
-        for cur_subj in gv.sub_trials.keys():
+        for cur_subj in list(gv.sub_trials.keys()):
             sub_trial_ind = 0
             for trial in gv.sub_trials[cur_subj]:
                 item, rt = trial
                 answer = gv.tmplistofanswers[sub_trial_ind]
-                audiofilename = gv.expname + cur_subj + `item` + DEFAULT_WAVEXT
+                audiofilename = gv.expname + cur_subj + repr(item) + DEFAULT_WAVEXT
                 if (answer != _NO_SOUND_FLAG_):  # do not check trials flagged as lacking spoken responses
                     #####################################################
                     # Make sure all audio files for this subject exist
@@ -2118,7 +2222,7 @@ class CheckVocalClass:
 
             elif (ans == 1):  # to continue session, we must parse the status
                 continue_old = 1
-                self.current_index, self.N_done = map(lambda x: string.atoi(x), string.split(status[0]))
+                self.current_index, self.N_done = [int(x) for x in status[0].split()]
                 logmsg("Restarting at index %i" % (self.current_index))
                 for filenum in range(self.current_index):  # recreate list of loaded to avoid re-triggering
                     gv.listofloaded.append(gv.listoffiles[filenum])  # not checked with multiple/deselected subjects!!
@@ -2129,11 +2233,11 @@ class CheckVocalClass:
                     exiterror("Could not open status file %s to read previous changes" % (self.statusfilename2))
                 status = myreadlines(self.statusfile2)
                 for line in status:  # recreate stated changes
-                    splitline = string.split(line.rstrip())
-                    savedindex = string.atoi(splitline[0])
-                    saveditem = string.atoi(splitline[1])
-                    savedfile = ' '.join(splitline[2:-1]).decode(gv.char_encoding)  # was [2] but filename may contain spaces!
-                    savedrt = string.atof(splitline[-1])  # was 3 ; deals with spaces in filenames ### March 2013
+                    splitline = line.rstrip().split()
+                    savedindex = int(splitline[0])
+                    saveditem = int(splitline[1])
+                    savedfile = ' '.join(splitline[2:-1])  # was [2] but filename may contain spaces!
+                    savedrt = float(splitline[-1])  # was 3 ; deals with spaces in filenames ### March 2013
                     if (gv.listoffiles[savedindex] != savedfile):
                         logmsg("Saved filename %s at saved index %i not matching filename %s" % (savedfile, savedindex, gv.listoffiles[savedindex]))
                         exiterror("Mismatching status information")
@@ -2144,7 +2248,7 @@ class CheckVocalClass:
                 self.statusfile2.close()
                 try:  # you never know when someone will try to process a folder on a CD...
                     self.statusfile1 = open(self.statusfilename1, "w")
-                    self.statusfile1.write(`self.current_index` + " " + `self.N_done` + "\n")
+                    self.statusfile1.write(repr(self.current_index) + " " + repr(self.N_done) + "\n")
                     self.statusfile1.flush()
                     self.statusfile2 = open(self.statusfilename2, "a")
                 except IOError:
@@ -2158,7 +2262,7 @@ class CheckVocalClass:
                 statuslines3 = myreadlines(self.statusfile3)
                 for statusline in statuslines3:
                     try:
-                        action, subject = string.split(statusline.decode(gv.char_encoding))
+                        action, subject = statusline.split()
                     except:
                         exiterror(
                             "Error parsing status file %s\nOffending line: %s" % (self.statusfilename3, statusline))
@@ -2180,7 +2284,7 @@ class CheckVocalClass:
                         else:
                             self.subject_select[subject] = -1  # a sign that subject is checked and retained
                 self.statusfile3.close()
-                for subject in gv.sub_trials.keys():
+                for subject in list(gv.sub_trials.keys()):
                     if (self.subject_select[subject] == 1):  # subject to retain not saved in status file
                         exiterror("Did not find retain status for subject %s in %s" % (subject, self.statusfilename3))
                     elif (self.subject_select[subject] == -1):
@@ -2197,7 +2301,7 @@ class CheckVocalClass:
         subselect = SubjectSelect(root)
         subselect.focus_force()
         subselect.wait_window(subselect)
-        for subject in gv.sub_trials.keys():
+        for subject in list(gv.sub_trials.keys()):
             self.subject_select[subject] = subselect.sub_buttons[subject].get()
 
     def start_new_session(self):
@@ -2205,7 +2309,7 @@ class CheckVocalClass:
         self.N_done = 0
         try:  # make sure we are at a writable directory before proceeding
             self.statusfile1 = open(self.statusfilename1, "w")
-            self.statusfile1.write(`self.current_index` + " " + `self.N_done` + "\n")
+            self.statusfile1.write(repr(self.current_index) + " " + repr(self.N_done) + "\n")
             self.statusfile1.flush()
             self.statusfile2 = open(self.statusfilename2, "w")
             self.statusfile3 = open(self.statusfilename3, "w")
@@ -2216,11 +2320,11 @@ class CheckVocalClass:
 
         self.select_subjects()
 
-        for subject in gv.sub_trials.keys():
+        for subject in list(gv.sub_trials.keys()):
             if (not self.subject_select[subject]):
-                self.statusfile3.write("REMOVE " + subject.encode(gv.char_encoding, 'replace') + "\n")
+                self.statusfile3.write("REMOVE " + subject + "\n")
             else:
-                self.statusfile3.write("RETAIN " + subject.encode(gv.char_encoding, 'replace') + "\n")
+                self.statusfile3.write("RETAIN " + subject + "\n")
 
         self.statusfile3.close()
 
@@ -2234,13 +2338,13 @@ class CheckVocalClass:
             outfile = open(outfilename, "w")  # hopefully this will work
         while (outfileOK < 1):  # keep requesting an output file name until valid
             if (outfileOK == 0):
-                ans = tkMessageBox.askyesno("File overwrite",("Output file %s exists, overwrite? (y/n)" % (outfilename)))
+                ans = tkinter.messagebox.askyesno("File overwrite",("Output file %s exists, overwrite? (y/n)" % (outfilename)))
             else:  # -1 means we are looping (probably after a click on "cancel")
                 ans = False
             if (ans):  # overwrite
                 outfileOK = 1
             else:  # ans=False
-                outfilename = tkFileDialog.asksaveasfilename(parent=root, initialdir=gv.expdir, filetypes=[('Text files', '*.txt')], title="Enter another output file name")
+                outfilename = tkinter.filedialog.asksaveasfilename(parent=root, initialdir=gv.expdir, filetypes=[('Text files', '*.txt')], title="Enter another output file name")
             try:
                 outfile = open(outfilename, "w")
                 outfileOK = 1
@@ -2259,13 +2363,13 @@ class CheckVocalClass:
         # make a new list from sub_ids.keys() instead of sub_trials.keys()
         # in order to save the data in the original subject order (as in azk)
         live_subjects = []
-        for subjnum in gv.sub_ids.keys():  # gv.sub_trials.keys():
+        for subjnum in list(gv.sub_ids.keys()):  # gv.sub_trials.keys():
             if (self.subject_select[gv.sub_ids[subjnum]]):
                 live_subjects.append(subjnum)
-        ref_subj = gv.sub_trials.keys()[0]
+        ref_subj = list(gv.sub_trials.keys())[0]
 
         if (gv.save_rows == -1):  # save subject data in AZK file
-            outfile.write("\nSubjects incorporated to date: %03d\n" % len(gv.sub_trials.keys()))
+            outfile.write("\nSubjects incorporated to date: %03d\n" % len(list(gv.sub_trials.keys())))
             outfile.write("Data file started on machine CheckVocal\n")
             subjno = 0
             # Need to re-sort by sub_origlines[s_id] (which was set to azklines[startline:endline])
@@ -2276,22 +2380,21 @@ class CheckVocalClass:
                 subjno += 1
                 sub_newlines = {}
                 outfile.write("\n**********************************************************************\n")
-                outfile.write(u"Subject %d,%s,%s, ID %s\n".encode(gv.char_encoding, 'replace') % (
-                subjno, gv.sub_dates[cur_subj], gv.sub_refresh[cur_subj], cur_subj))  # ThP 18Aug17 bugfix
+                outfile.write("Subject %d,%s,%s, ID %s\n" % ( subjno, gv.sub_dates[cur_subj], gv.sub_refresh[cur_subj], cur_subj))  # ThP 18Aug17 bugfix
                 if (gv._COT_):
                     outfile.write("  Item       RT       COT\n")
                 else:
                     outfile.write("  Item       RT\n")
                 for trial in gv.sub_trials[ref_subj]:
-                    sub_newlines[`trial[0]`] = ("%6d  %8.2f\n" % (
+                    sub_newlines[repr(trial[0])] = ("%6d  %8.2f\n" % (
                     trial[0], gv.sub_trials[cur_subj][gv.sub_trials[ref_subj].index(trial)][1]))
                 for trial_line in gv.sub_origlines[cur_subj]:
                     if (trial_line[0] == "!"):
                         outfile.write(trial_line)
                     else:
-                        trialitem = string.split(trial_line)[0]
+                        trialitem = trial_line.split()[0]
                         if (gv._COT_):
-                            cotstr = " " + ("%9.2f" % (string.atof(string.split(trial_line)[2])))
+                            cotstr = " " + ("%9.2f" % (float(trial_line.split()[2])))
                         else:
                             cotstr = ""
                         # need to remove final \n from trial line so it can be re-appended after optional COT
@@ -2302,7 +2405,7 @@ class CheckVocalClass:
             # for cur_subj in gv.sub_trials.keys():
             for subjnum in live_subjects:
                 cur_subj = gv.sub_ids[subjnum]
-                outfile.write(gv._SEP + cur_subj.encode(gv.char_encoding, 'replace'))
+                outfile.write(gv._SEP + cur_subj)
             outfile.write("\n")
             # Optionally, save date/time/PC info
             if gv.savedate.get() == 1:
@@ -2310,14 +2413,14 @@ class CheckVocalClass:
                     cur_subj = gv.sub_ids[subjnum]  # not sub_ids_new! (from azk2txt)
                     timedatestr = gv.sub_dates[cur_subj]
                     curdate = timedatestr.split()[0]
-                    outfile.write(gv._SEP + curdate.encode(gv.char_encoding))  # in case of non-latin IDs
+                    outfile.write(gv._SEP + curdate)  # in case of non-latin IDs
                 outfile.write("\n")
             if gv.savetime.get() == 1:
                 for subjnum in live_subjects:
                     cur_subj = gv.sub_ids[subjnum]
                     timedatestr = gv.sub_dates[cur_subj]
                     curtime = timedatestr.split()[1]
-                    outfile.write(gv._SEP + curtime.encode(gv.char_encoding))  # in case of non-latin IDs
+                    outfile.write(gv._SEP + curtime)  # in case of non-latin IDs
                 outfile.write("\n")
             if gv.savecomputer.get() == 1:
                 for subjnum in live_subjects:
@@ -2325,7 +2428,7 @@ class CheckVocalClass:
                     timedatestr = gv.sub_dates[cur_subj]
                     curcomputer = timedatestr.split(None, 3)[
                         3]  # sep=None, maxsplit=3; computer name may contain spaces!
-                    outfile.write(gv._SEP + curcomputer.encode(gv.char_encoding))  # in case of non-latin IDs
+                    outfile.write(gv._SEP + curcomputer)  # in case of non-latin IDs
                 outfile.write("\n")
             if gv.saverefresh.get() == 1:
                 for subjnum in live_subjects:
@@ -2333,11 +2436,11 @@ class CheckVocalClass:
                     refreshstr = gv.sub_refresh[cur_subj]
                     currefresh = refreshstr.split()[1]
                     if (len(currefresh) > 2 and currefresh[-2:] == "ms"): currefresh = currefresh[:-2]
-                    outfile.write(gv._SEP + currefresh.encode(gv.char_encoding))  # in case of non-latin IDs
+                    outfile.write(gv._SEP + currefresh)  # in case of non-latin IDs
                 outfile.write("\n")
             ##
             for trial in gv.sub_trials[ref_subj]:
-                outfile.write(`trial[0]`)
+                outfile.write(repr(trial[0]))
                 for subjnum in live_subjects:
                     cur_subj = gv.sub_ids[subjnum]
                     outfile.write(gv._SEP + "%.1f" % (gv.sub_trials[cur_subj][gv.sub_trials[ref_subj].index(trial)][1]))
@@ -2345,7 +2448,7 @@ class CheckVocalClass:
             ## save trial order after RT; added 12/2011
             if gv.savetrialorder.get() == 1:
                 for trial in gv.sub_trials[ref_subj]:
-                    outfile.write("ord" + `trial[0]`)
+                    outfile.write("ord" + repr(trial[0]))
                     for subjnum in live_subjects:
                         cur_subj = gv.sub_ids[subjnum]
                         outfile.write(
@@ -2371,7 +2474,7 @@ class CheckVocalClass:
                 curdate, curtime, on_, curcomputer = gv.sub_dates[cur_subj].split(None, 3)  # sep=None, maxsplit=3; computer name may contain spaces!
                 refreshstr = gv.sub_refresh[cur_subj]
                 for trial in gv.sub_trials[cur_subj]:
-                    outfile.write(cur_subj.encode(gv.char_encoding))  # in case of non-latin IDs
+                    outfile.write(cur_subj)  # in case of non-latin IDs
                     if gv.savedate.get() == 1:
                         outfile.write(gv._SEP + curdate)
                     if gv.savetime.get() == 1:
@@ -2400,15 +2503,15 @@ class CheckVocalClass:
                 outfile.write(gv._SEP + "refresh")
             ##
             for trial in gv.sub_trials[ref_subj]:
-                outfile.write(gv._SEP + `trial[0]`)
+                outfile.write(gv._SEP + repr(trial[0]))
             ## Optionally, save trial order after RT; added 12/2011
             if gv.savetrialorder.get() == 1:
                 for trial in gv.sub_order[ref_subj]:
-                    outfile.write(gv._SEP + "ord" + `trial[0]`)
+                    outfile.write(gv._SEP + "ord" + repr(trial[0]))
             outfile.write("\n")
             for subjnum in live_subjects:
                 cur_subj = gv.sub_ids[subjnum]
-                outfile.write(cur_subj.encode(gv.char_encoding, 'replace'))
+                outfile.write(cur_subj)
                 #
                 curdate, curtime, on_, curcomputer = gv.sub_dates[cur_subj].split(None, 3)  # sep=None, maxsplit=3; computer name may contain spaces!
                 refreshstr = gv.sub_refresh[cur_subj]
@@ -2441,7 +2544,7 @@ class CheckVocalClass:
             # this is the same as exiterror but is called directly
             # because exiterror also writes to the logfile,
             # which here cannot be opened
-            tkMessageBox.showerror("Log file error", "Could not open %s to write processing log" % (logfilename))
+            tkinter.messagebox.showerror("Log file error", "Could not open %s to write processing log" % (logfilename))
             global_quit()
 
         logmsg(("CheckVocal version %s (%s)" % (VERSION, mtime)))
@@ -2460,7 +2563,7 @@ class CheckVocalClass:
 
         # no point in moving on if there are no valid subject data
         valid_subjects = 0
-        for subject in gv.sub_trials.keys():
+        for subject in list(gv.sub_trials.keys()):
             if (self.subject_select[subject] == 1): valid_subjects += 1
         if (valid_subjects == 0):
             exiterror("No valid subject data to process!")
@@ -2473,7 +2576,7 @@ class CheckVocalClass:
 
         # no point in moving on if there are no valid subject data
         valid_subjects = 0
-        for subject in gv.sub_trials.keys():
+        for subject in list(gv.sub_trials.keys()):
             if (self.subject_select[subject] == 1): valid_subjects += 1
         if (valid_subjects == 0):
             exiterror("No valid subject data to process!")
@@ -2482,17 +2585,17 @@ class CheckVocalClass:
             self.start_new_session()  # set up status files and select subjects
 
         # Remove deselected subject entries from the sub_trials dictionary
-        for subject in gv.sub_trials.keys():
+        for subject in list(gv.sub_trials.keys()):
             if (not self.subject_select[subject]):
                 del (gv.sub_trials[subject])
 
         # End of status restoration and subject verification
-        if (len(gv.sub_trials.keys()) < 1):
+        if (len(list(gv.sub_trials.keys())) < 1):
             exiterror("No subjects left to process!")
 
         # Make sure items are numbered identically and sorted correctly between subjects
-        ref_subj = gv.sub_trials.keys()[0]
-        for cur_subj in gv.sub_trials.keys()[1:]:
+        ref_subj = list(gv.sub_trials.keys())[0]
+        for cur_subj in list(gv.sub_trials.keys())[1:]:
             for trial in range(self.ntrials):
                 if (gv.sub_trials[ref_subj][trial][0] != gv.sub_trials[cur_subj][trial][0]):
                     exiterror("Trial (item) number mismatch between subjects %i (%s, item %i) and %i (%s, item %i)" % (gv.sub_nums[ref_subj], ref_subj, gv.sub_trials[ref_subj][trial][0], gv.sub_nums[cur_subj], cur_subj, gv.sub_trials[cur_subj][trial][0]))
@@ -2501,7 +2604,7 @@ class CheckVocalClass:
         # prepare counters
         gv.done = 0
         gv.SRATE = 0
-        self.N_todo = len(gv.sub_trials.keys()) * self.ntrials  # how many responses there are to be checked in total
+        self.N_todo = len(list(gv.sub_trials.keys())) * self.ntrials  # how many responses there are to be checked in total
 
         cvwave = CheckWaves(root)
         # if not gv.done: # for rare cases of end-session crashes # commented out ThP 29May19
@@ -2524,14 +2627,14 @@ class CheckVocalClass:
             logfilename2 = gv.expname + "-log.txt"
             try:
                 os.rename(self.statusfilename2, logfilename2)
-                tkMessageBox.showinfo("Done", "CheckVocal terminated successfully")
+                tkinter.messagebox.showinfo("Done", "CheckVocal terminated successfully")
             except:
                 logmsg("Failed to rename log file %s to %s" % (self.statusfilename2, logfilename2))
-                tkMessageBox.showwarning("Log file naming failure", ("Did not succeed in renaming %s to %s\nTake care of log file manually!" % (self.statusfilename2, logfilename2)))
+                tkinter.messagebox.showwarning("Log file naming failure", ("Did not succeed in renaming %s to %s\nTake care of log file manually!" % (self.statusfilename2, logfilename2)))
 
         else:  # not done
             logmsg("Exiting, not done")
-            tkMessageBox.showinfo("Interrupt", "CheckVocal was interrupted\nYou may continue at a later time")
+            tkinter.messagebox.showinfo("Interrupt", "CheckVocal was interrupted\nYou may continue at a later time")
 
         global_quit()
         #
@@ -2554,10 +2657,10 @@ class CheckVocalClass_Files(CheckVocalClass):
         self.subject_select = {}
         gv.Nsubj = 1  # assign all audio files to one dummy "subject"
         subjno = 1
-        s_id = u"DummySubj"
+        s_id = "DummySubj"
         date_ = "00/00/0000 00:00:00 on XXXXXX"  # we could get a date from the audio files but it is not saved anyway
         refresh_ = "refresh 00.00ms"
-        logmsg("Subject " + `subjno` + ", ID=" + s_id)
+        logmsg("Subject " + repr(subjno) + ", ID=" + s_id)
         gv.sub_ids[subjno] = s_id
         gv.sub_dates[s_id] = date_
         gv.sub_refresh[s_id] = refresh_
@@ -2580,7 +2683,7 @@ class CheckVocalClass_Files(CheckVocalClass):
             ansfile = codecs.open(ansfilename, "r", gv.char_encoding)  # open straight into Unicode
         except:  # if no -ans file found, default to no answer display
             logmsg("Could not open %s to read correct answers!" % (ansfilename))
-            answer = u"--"
+            answer = "--"
             for trial in range(self.ntrials):
                 gv.listofanswers.append(answer)
             return
@@ -2598,19 +2701,19 @@ class CheckVocalClass_Files(CheckVocalClass):
             if (len(line) < 2):
                 exiterror("Empty line (%i) in answers file!" % (i))
             try:
-                item, answer = string.split(line.rstrip(), maxsplit=1)
+                item, answer = line.rstrip().split(maxsplit=1)
             except:
                 exiterror("Error reading answers file\n(problem line %i, contents %s)" % (i, line.rstrip()))
             rei = re.compile(item)
-            nf = len(filter(lambda f: re.search(rei, f), gv.listoffiles))
+            nf = len([f for f in gv.listoffiles if re.search(rei, f)])
             if (nf < 1):
                 logmsg("Answer line %i (%s) not matching any files" % (i, item))
             self.relist.append(item)
             self.anlist.append(answer)
-        if (self.match_answers(mode="re") <> 0):  # try flexible matching first, using regular expressions
+        if (self.match_answers(mode="re") != 0):  # try flexible matching first, using regular expressions
             logmsg("Switching to strict filename matching")
             exitcode = self.match_answers(mode="strict")  # try strict matching if regex matching fails
-            if (exitcode <> 0):
+            if (exitcode != 0):
                 logmsg("Strict matching failed; regular expression message follows:")
                 exiterror(self.message)
 
@@ -2625,25 +2728,25 @@ class CheckVocalClass_Files(CheckVocalClass):
                 self.relist2 = self.relist
         for f in gv.listoffiles:
             if (mode == "re"):
-                fl = map(lambda a: re.search(a, f), self.relist)
+                fl = [re.search(a, f) for a in self.relist]
             elif (mode == "strict"):
                 if (len(f) > 4 and f[-4:].lower() == DEFAULT_WAVEXT.lower()):
                     f2 = f[:-4]
                 else:
                     f2 = f
-                fl = map(lambda a: re.match("(?:" + a + r")\Z", f2), self.relist2)  # from https://stackoverflow.com/questions/30212413/backport-python-3-4s-regular-expression-fullmatch-to-python-2
+                fl = [re.match("(?:" + a + r")\Z", f2) for a in self.relist2]  # from https://stackoverflow.com/questions/30212413/backport-python-3-4s-regular-expression-fullmatch-to-python-2
             else:
                 exiterror("Unknown mode in match_answers: %s" % (mode))
-            na = len(filter(lambda x: x, fl))
+            na = len([x for x in fl if x])
             if (na < 1):
                 logmsg("No spoken response for file %s" % (f))
-                gv.listofanswers.append(u"--")
+                gv.listofanswers.append("--")
             elif (na > 1):
                 if (mode == "re"): self.message = "Multiple answers matching file %s" % (f)
                 return (-1)
             else:
                 ai = [i for i, a in enumerate(fl) if a != None]
-                if (len(ai) <> 1):
+                if (len(ai) != 1):
                     if (mode == "re"): self.message = "Something weird happened while processing answers file"
                     return (-2)
                 gv.listofanswers.append(self.anlist[ai[0]])
@@ -2659,8 +2762,8 @@ class CheckVocalClass_Files(CheckVocalClass):
         outfilename = gv.expname + "-datalist.txt"
         outfile = self.verify_output_filename(outfilename)
 
-        live_subjects = gv.sub_ids.keys()  # single dummy subject, necessarily "selected"
-        ref_subj = gv.sub_trials.keys()[0]
+        live_subjects = list(gv.sub_ids.keys())  # single dummy subject, necessarily "selected"
+        ref_subj = list(gv.sub_trials.keys())[0]
 
         if (gv.save_rows == 0):  # save subject data in columns, default
             for trial in gv.sub_trials[ref_subj]:
@@ -2676,7 +2779,7 @@ class CheckVocalClass_Files(CheckVocalClass):
             outfile.write("\n")
             for subjnum in live_subjects:
                 cur_subj = gv.sub_ids[subjnum]
-                outfile.write(cur_subj.encode(gv.char_encoding, 'replace'))
+                outfile.write(cur_subj)
                 for trial in gv.sub_trials[cur_subj]:
                     outfile.write(gv._SEP + "%.1f" % (trial[1]))
                 outfile.write("\n")
@@ -2696,7 +2799,7 @@ def global_quit():
 
 
 myfile = sys.argv[0]
-myname = os.path.splitext(os.path.basename(myfile))[0]
+myname,myext = os.path.splitext(os.path.basename(myfile))
 finfo = os.path.getmtime(myfile)
 mtime = datetime.date.isoformat(datetime.date.fromtimestamp(finfo))
 if (myname == "CheckVocal"):
@@ -2705,18 +2808,20 @@ elif (myname == "CheckFiles"):
     DMDXMODE = False
 # otherwise, it is a development version, in which case the default (defined at the top) applies
 
-CurDir = os.getcwdu()  # u for unicode; really important for Tkinter!
+CurDir = os.getcwd()  # u for unicode; really important for Tkinter!
+if myext==".exe": CurDir = os.path.join(CurDir,"_internal") # assume pyinstaller setup
 if DMDXMODE:
-    IconFile = os.path.join(CurDir, u"icons", u"cv.ico")
+    IconFile = os.path.join(CurDir, "icons", "cv.ico")
 else:
-    IconFile = os.path.join(CurDir, u"icons", u"cf.ico")
+    IconFile = os.path.join(CurDir, "icons", "cf.ico")
 try:
     if (not os.path.exists(IconFile)): IconFile = "None"
 except:
     IconFile = "None"  # to catch any problems
 
 root = Tk()
-root.title(u"CheckVocal main")
+root.title("CheckVocal main")
+default_bg = tuple([v // 256 for v in root.winfo_rgb(root.cget("background"))]) # 16-bit values returned by winfo_rgb
 if (IconFile != "None"): root.wm_iconbitmap(IconFile)
 root.withdraw()
 
