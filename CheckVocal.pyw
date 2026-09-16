@@ -1,13 +1,15 @@
 #
-# CheckVocal.pyw v.4.0.0 alpha
+# CheckVocal.pyw v.4.0.2 alpha
 # Athanassios Protopapas
 # 9 October 2025 (automatically generated from v3.0.2 using 2to3)
 # 5 November 2025 (first alpha version complete)
-#   Gradually replaced snack sound library with:
+#  Gradually replaced snack sound library with:
 #   - simpleaudio for playing out sounds
 #   - praat-parselmouth for signal processing and creating spectograms
 #   - Pillow for displaying the waveform and spectrogram panels
 # 1 June 2026 (windows packaging with PyInstaller)
+# 10 September 2026 (ensure nonzero audio buffer length before playing sound)
+# 16 September 2026 (added pyInstaller splash screen due to long loading time)
 #
 # This program will help with naming task data from DMDX
 # It will present each recorded vocal response along with
@@ -17,7 +19,7 @@
 # The user can also check and fix improperly triggered RT measurements.
 # The results are saved in a tab-separated file, one row per subject.
 #
-VERSION = "4.0.0.0"
+VERSION = "4.0.2.0"
 EMAIL = "protopap@gmail.com"
 import sys
 
@@ -55,6 +57,47 @@ import numpy as np
 from PIL import ImageTk, Image, ImageEnhance
 import simpleaudio as sa
 from scipy.signal import butter, lfilter
+
+
+def resource_path(*parts):
+    base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(sys.argv[0])))
+    return os.path.join(base_path, *parts)
+
+
+def existing_resource_path(*candidates):
+    for parts in candidates:
+        path = resource_path(*parts)
+        if os.path.exists(path):
+            return path
+    return resource_path(*candidates[0])
+
+
+def set_window_icon(window):
+    if IconFile == "None":
+        return
+    try:
+        window.wm_iconbitmap(IconFile)
+    except Exception:
+        pass
+
+
+def place_window(window, x, y):
+    window.deiconify()
+    window.update_idletasks()
+    width = max(window.winfo_reqwidth(), window.winfo_width())
+    height = max(window.winfo_reqheight(), window.winfo_height())
+    screen_width = window.winfo_screenwidth()
+    screen_height = window.winfo_screenheight()
+    x = min(max(x, 20), max(20, screen_width - width - 20))
+    y = min(max(y, 40), max(40, screen_height - height - 40))
+    window.geometry("+%d+%d" % (x, y))
+    window.lift()
+    if _MAC_:
+        try:
+            window.attributes("-topmost", True)
+            window.after_idle(lambda: window.attributes("-topmost", False))
+        except Exception:
+            pass
 
 ## FIXED PARAMETERS set in GlobVariables
 DEFAULT_C_DIST = 10  # pixels for vertical panel separation
@@ -303,8 +346,9 @@ class GlobVariables:
             basepath = os.path.expanduser(UBPATH)
             cvpath = os.path.join(basepath, APPNAME)
             try:
-                pl = plistlib.readPlist(os.path.join(cvpath, PLISTFNAME))
-            except IOError:  # nonexistent file
+                with open(os.path.join(cvpath, PLISTFNAME), "rb") as plist_file:
+                    pl = plistlib.load(plist_file)
+            except (IOError, OSError):  # nonexistent file
                 self.lastfolder = "."
             else:
                 self.lastfolder = pl["lastfolder"]
@@ -372,7 +416,7 @@ class ContDialog(tkinter.simpledialog.Dialog):
     def __init__(self, parent, title=None, p_time="UNKNOWN"):
         Toplevel.__init__(self, parent)
         self.transient(parent)  # OK to be transient, parent is msgwindow
-        if (IconFile != "None"): self.wm_iconbitmap(IconFile)
+        set_window_icon(self)
         if title:
             self.title(title)
         self.parent = parent
@@ -435,8 +479,8 @@ class TextWindow(Toplevel):
 
     def __init__(self, parent):
         Toplevel.__init__(self, parent)
-        self.geometry("+%d+%d" % (gv.scale(100), gv.scale(480)))
-        if (IconFile != "None"): self.wm_iconbitmap(IconFile)
+        place_window(self, gv.scale(100), gv.scale(480))
+        set_window_icon(self)
 
     def body(self):
         self.textscrollbar = Scrollbar(self)
@@ -472,7 +516,7 @@ class SetupWindow(Toplevel):
     def setup_window(self, windowtitle):
         self.title(windowtitle)
         self.geometry("+%d+%d" % (gv.scale(100), gv.scale(150)))
-        if (IconFile != "None"): self.wm_iconbitmap(IconFile)
+        set_window_icon(self)
         self.initial_focus = self
         self.initial_focus.focus_set()
         self.grab_set()
@@ -483,16 +527,16 @@ class SetupWindow(Toplevel):
         self.status = -1
         self.fileOK = BooleanVar()
         self.fileOK.set(False)
-        self.fileOK.trace("w", self.mayproceed)
+        self.fileOK.trace_add("write", self.mayproceed)
         self.timeoutOK = BooleanVar()
         self.timeoutOK.set(True)
-        self.timeoutOK.trace("w", self.mayproceed)
+        self.timeoutOK.trace_add("write", self.mayproceed)
         self.gammaOK = BooleanVar()
         self.gammaOK.set(True)
-        self.gammaOK.trace("w", self.mayproceed)
+        self.gammaOK.trace_add("write", self.mayproceed)
         self.contrenhOK = BooleanVar()
         self.contrenhOK.set(True)
-        self.contrenhOK.trace("w", self.mayproceed)
+        self.contrenhOK.trace_add("write", self.mayproceed)
         #
         self.pack_actionbuttons_row()
         self.pack_workmode_row()
@@ -506,6 +550,7 @@ class SetupWindow(Toplevel):
         self.pack_timeout_row()
         self.pack_blink_row()
         self.pack_filename_row()
+        place_window(self, gv.scale(100), gv.scale(150))
 
     # widgets
 
@@ -513,6 +558,7 @@ class SetupWindow(Toplevel):
         self.contF0 = Frame(self)
         self.cbutton0 = Button(self.contF0, text="Proceed", command=self.proceed)
         self.cbutton0.config(width=12, font=gv.mainboldfont, anchor="s")
+        self.cbutton0.config(state="disabled")
         self.cbutton0.pack(side="right", padx=gv.scale(24))
         self.cbutton01 = Button(self.contF0, text="Reset", command=self.reset)
         self.cbutton01.config(width=8, font=gv.mainfont, anchor="s")
@@ -749,7 +795,7 @@ class SetupWindow(Toplevel):
         self.timechoice2.config(font=gv.mainfont)
         self.timechoice2.pack(side="left", anchor="s")
         self.tentry5 = Entry(self.timeF5, textvariable=gv.timetxt)  # ,validate="key",validatecommand=self.valtime)
-        gv.timetxt.trace("w", self.timeout_edit)
+        gv.timetxt.trace_add("write", self.timeout_edit)
         self.ptimetxt = gv.timetxt.get()
         self.tentry5.config(width=6, font=gv.mainfont)
         self.tentry5.pack(side="left")
@@ -780,9 +826,13 @@ class SetupWindow(Toplevel):
         self.rlabel1.config(width=20, font=gv.mainboldfont, anchor="e")
         self.rlabel1.pack(side="left")
         self.rmessage1 = Label(self.azkF1, textvariable=gv.azkff, anchor="w")
-        self.rmessage1.config(width=60, font=gv.mainfont, background="white", foreground="black")
+        self.rmessage1.config(width=60, font=gv.mainfont, background="white", foreground="black",
+                              relief=SUNKEN, bd=1, cursor="hand2")
         self.rmessage1.bind("<Button-1>", self.get_filename)
         self.rmessage1.pack(side="left", pady=5)
+        self.choosebutton1 = Button(self.azkF1, text="Choose...", command=self.get_filename)
+        self.choosebutton1.config(font=gv.mainfont)
+        self.choosebutton1.pack(side="left", padx=gv.scale(5))
         self.rlabel10 = Label(self.azkF1, text=" ")
         self.rlabel10.config(font=gv.mainboldfont)
         self.rlabel10.pack(side="left")
@@ -799,7 +849,8 @@ class SetupWindow(Toplevel):
         else:
             self.imgcgauto()
         self.focus_force()
-        self.get_filename()
+        if not _MAC_:
+            self.get_filename()
 
     def inrun(self):
         self.status = 1  # inrun
@@ -808,6 +859,7 @@ class SetupWindow(Toplevel):
         self.rlabel1.config(state=DISABLED)
         self.rlabel10.config(state=DISABLED)
         self.rmessage1.config(state=DISABLED)
+        self.choosebutton1.config(state=DISABLED)
         self.fileOK.set(True)
         # timeout should also not be changed once started, to prevent inconsistencies
         self.rlabel51.config(state=DISABLED)
@@ -996,13 +1048,14 @@ class SetupWindow(Toplevel):
                 msgwindow.display("System application folder created: %s\n" % (cvpath))
             pl = dict(lastfolder=gv.expdir)
             try:
-                plistlib.writePlist(pl, os.path.join(cvpath, PLISTFNAME))
+                with open(os.path.join(cvpath, PLISTFNAME), "wb") as plist_file:
+                    plistlib.dump(pl, plist_file)
             except:  # failed to update
                 msgwindow.display("Failed to update registry with selected folder\n")
                 # logfile not open yet, so cannot use logmsg
 
     def get_filename(self, c_event=None):
-        filename = tkinter.filedialog.askopenfilename(parent=self.parent, initialdir=gv.lastfolder,
+        filename = tkinter.filedialog.askopenfilename(parent=self, initialdir=gv.lastfolder,
                                                 filetypes=[('DMDX data files', '*.azk')],
                                                 title="Choose a DMDX results file")
         if (len(filename) > 0):
@@ -1031,7 +1084,7 @@ class SetupWindow_Files(SetupWindow):
         self.setup_window("CheckVocal files setup")
 
     def get_filename(self, c_event=None):
-        filename = tkinter.filedialog.askdirectory(parent=self.parent, initialdir=gv.lastfolder,
+        filename = tkinter.filedialog.askdirectory(parent=self, initialdir=gv.lastfolder,
                                              title="Choose the folder with your audio files")
         if (len(filename) > 0):
             gv.expdir = filename + "/"
@@ -1059,7 +1112,7 @@ class SetupWindow_Files(SetupWindow):
         self.rlabel51.config(width=20, font=gv.mainfont, anchor="e")
         self.rlabel51.pack(side="left")
         self.tentry5 = Entry(self.timeF5, textvariable=gv.timetxt)  # ,validate="key",validatecommand=self.valtime)
-        gv.timetxt.trace("w", self.timeout_edit)
+        gv.timetxt.trace_add("write", self.timeout_edit)
         self.ptimetxt = gv.timetxt.get()
         self.tentry5.config(width=6, font=gv.mainfont)
         self.tentry5.pack(side="left")
@@ -1124,7 +1177,8 @@ class SetupWindow_Files(SetupWindow):
         gv.savetime.set(0)
         self.imgcgauto()
         self.focus_force()
-        self.get_filename()
+        if not _MAC_:
+            self.get_filename()
         ## need to allow selecting or disabling the -ans file somewhere
 
     def inrun(self):
@@ -1134,6 +1188,7 @@ class SetupWindow_Files(SetupWindow):
         self.rlabel1.config(state=DISABLED)
         self.rlabel10.config(state=DISABLED)
         self.rmessage1.config(state=DISABLED)
+        self.choosebutton1.config(state=DISABLED)
         # mode cannot be changed after startup
         self.modechoice2a.config(state=DISABLED)
         self.modechoice2b.config(state=DISABLED)
@@ -1179,12 +1234,14 @@ class CheckWaves(Toplevel):
 
     def playleft(self, event=None):  # play sound file up to the RT mark
         if self.playobject.is_playing(): self.playobject.stop()
-        self.playobject = sa.play_buffer(self.wavevector[:int(gv.SRATE * abs(self.rt))],1,2,self.intsrate)
+        endpt = int(gv.SRATE * abs(self.rt)) # sa.play_buffer crashes if buffer is empty, so we need to check; ThP 2026-09-10
+        if endpt>0: self.playobject = sa.play_buffer(self.wavevector[:endpt],1,2,self.intsrate)
         #self.s.play(end=int(gv.SRATE * abs(self.rt)))
 
     def playright(self, event=None):  # play sound file from the RT mark on
         if self.playobject.is_playing(): self.playobject.stop()
-        self.playobject = sa.play_buffer(self.wavevector[int(gv.SRATE * abs(self.rt)):],1,2,self.intsrate)
+        stapt = int(gv.SRATE * abs(self.rt)) # sa.play_buffer crashes if buffer is empty, so we need to check; ThP 2026-09-10
+        if stapt<self.nsamples: self.playobject = sa.play_buffer(self.wavevector[stapt:],1,2,self.intsrate)
         gv.snd = self.snd
         #self.s.play(start=int(gv.SRATE * abs(self.rt)))
 
@@ -1699,7 +1756,7 @@ class CheckWaves(Toplevel):
 
         Toplevel.__init__(self, parent)
         self.geometry("+%d+%d" % (gv.scale(100), gv.scale(50)))
-        if (IconFile != "None"): self.wm_iconbitmap(IconFile)
+        set_window_icon(self)
         self.title("Check DMDX vocal responses: Experiment %s" % (gv.expname))
 
         self.frame = Frame(self)
@@ -1831,7 +1888,7 @@ class SubjectSelect(Toplevel):
         self.parent = parent
         self.title("DMDX subject selection")
         self.geometry("+%d+%d" % (gv.scale(100), gv.scale(175)))
-        if (IconFile != "None"): self.wm_iconbitmap(IconFile)
+        set_window_icon(self)
 
         self.sublabel = Label(self, text="Select subjects to process data", font=gv.mainboldfont)
         self.sublabel.pack(padx=gv.scale(30), pady=gv.scale(5))
@@ -2808,12 +2865,10 @@ elif (myname == "CheckFiles"):
     DMDXMODE = False
 # otherwise, it is a development version, in which case the default (defined at the top) applies
 
-CurDir = os.getcwd()  # u for unicode; really important for Tkinter!
-if myext==".exe": CurDir = os.path.join(CurDir,"_internal") # assume pyinstaller setup
 if DMDXMODE:
-    IconFile = os.path.join(CurDir, "icons", "cv.ico")
+    IconFile = existing_resource_path(("icons", "cv.ico"), ("cv.ico",))
 else:
-    IconFile = os.path.join(CurDir, "icons", "cf.ico")
+    IconFile = existing_resource_path(("icons", "cf.ico"), ("cf.ico",))
 try:
     if (not os.path.exists(IconFile)): IconFile = "None"
 except:
@@ -2822,7 +2877,7 @@ except:
 root = Tk()
 root.title("CheckVocal main")
 default_bg = tuple([v // 256 for v in root.winfo_rgb(root.cget("background"))]) # 16-bit values returned by winfo_rgb
-if (IconFile != "None"): root.wm_iconbitmap(IconFile)
+set_window_icon(root)
 root.withdraw()
 
 gv = GlobVariables()
@@ -2837,6 +2892,12 @@ if DMDXMODE:
 else:
     cv_process = CheckVocalClass_Files()
     startw = SetupWindow_Files(root)
+
+try:
+    import pyi_splash
+    pyi_splash.close()
+except ModuleNotFoundError:
+    pass
 
 startw.startup()
 

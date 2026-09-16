@@ -35,11 +35,18 @@ at_a = Analysis(
     optimize=0,
 )
 
+splash = Splash('cv_loading.png',
+                binaries=cv_a.binaries,
+                datas=cv_a.datas,
+                text_pos=None)
+				
 cv_pyz = PYZ(cv_a.pure)
 
 cv_exe = EXE(
     cv_pyz,
     cv_a.scripts,
+	splash,
+	splash.binaries,
     [],
     exclude_binaries=True,
     name='CheckVocal',
@@ -60,6 +67,8 @@ cv_exe = EXE(
 cf_exe = EXE(
     cv_pyz,
     cv_a.scripts,
+	splash,
+	splash.binaries,
     [],
     exclude_binaries=True,
     name='CheckFiles',

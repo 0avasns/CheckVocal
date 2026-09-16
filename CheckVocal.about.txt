@@ -1,7 +1,7 @@
-CheckVocal/CheckFiles 4.0.0 alpha (translated from 3.0.2 using 2to3; replaced snack)
-azk2txt 2.0.0 alpha (translated from 1.3.0 using 2to3)
+CheckVocal/CheckFiles 4.0.2 alpha (v4 automatically translated from 3.0.2 using 2to3)
+azk2txt 2.0.0 alpha (automatically translated from 1.3.0 using 2to3)
 generated: 9 October 2025
-revised: 1 June 2026
-packaged: 1 June 2026
+revised: 10 September 2026
+packaged: 16 September 2026
 Athanassios Protopapas
 protopap@gmail.com
